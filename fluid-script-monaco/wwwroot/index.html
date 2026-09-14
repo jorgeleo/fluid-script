@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FluidScript Monaco sample</title>
+  <link rel="stylesheet" href="/styles/site.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">FluidScript</p>
+        <h1>Monaco playground</h1>
+        <p class="subtitle">Edit, fold, syntax-color, and run a FluidScript program.</p>
+      </div>
+      <div class="toolbar">
+        <span id="status" class="status" role="status">Loading editor…</span>
+        <button id="run-button" type="button" disabled>Run <kbd>Ctrl</kbd><kbd>Enter</kbd></button>
+        <button id="reset-button" type="button" class="secondary" disabled>Reset</button>
+      </div>
+    </header>
+
+    <section class="workspace" aria-label="FluidScript editor and output">
+      <div class="editor-panel">
+        <div id="editor" class="editor" aria-label="FluidScript source editor"></div>
+      </div>
+      <aside class="output-panel">
+        <div class="panel-heading">
+          <h2>Output</h2>
+          <span id="result" class="result"></span>
+        </div>
+        <pre id="output" class="output" aria-live="polite">Run the program to see output.</pre>
+      </aside>
+    </section>
+
+    <footer class="app-footer">
+      <span>FluidScript Monaco integration is kept in <code>/monaco</code>.</span>
+      <span>Demo wiring is kept in <code>/demo</code>.</span>
+    </footer>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.55.1/min/vs/loader.min.js"></script>
+  <script src="/monaco/loader.js"></script>
+</body>
+</html>
