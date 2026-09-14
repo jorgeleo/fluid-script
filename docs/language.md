@@ -16,8 +16,9 @@ error. Assignment never declares a name.
 
 The runtime value set is `null`, `bool`, signed `int`, `decimal` (subject to
 the host decimal range), `string`, `datetime`, `guid`,
-`byte`, mutable arrays, functions, and user objects. Type hints are checked by
-the semantic pass; an omitted hint has type `any` and receives runtime checks.
+`byte`, mutable arrays, mutable string-keyed dictionaries, functions, and user
+objects. Type hints are checked by the semantic pass; an omitted hint has type
+`any` and receives runtime checks.
 Integer arithmetic remains integer when both operands are integers; otherwise
 numeric arithmetic promotes to decimal. Strings concatenate with `+` only
 when both operands are strings. Equality is value equality for scalar values
@@ -28,6 +29,29 @@ and string pairs only.
 once and rejects later assignment. Array indexes are zero-based integers;
 non-array targets, non-integer indexes, and out-of-range indexes are runtime
 faults.
+
+Dictionaries use `dict` as their base type and `{ key: value }` literals;
+`{}` creates an empty dictionary. Literal keys and values evaluate
+left-to-right. Every key must evaluate to `string`; duplicate literal keys are
+permitted and the final value wins. Dictionary entries are accessed and
+assigned with a string index, such as `values["prop name"]`; assignment creates
+or replaces that key. A non-string dictionary key faults with `FS5031`, and a
+read of an absent key faults with `FS5032`. Dictionary values and index results
+have type `any`.
+
+`jsonSerialize(value)` serializes JSON-native values (`null`, `bool`, `int`,
+`decimal`, `string`, arrays, dictionaries, and declared-object fields) to
+canonical JSON, ordering property keys ordinally. `jsonDeserialize(text)`
+parses standard JSON into the corresponding FluidScript values; JSON objects
+become `dict` values, so nested dynamic properties remain dictionaries after a
+round trip. To restore a declared object, use
+`jsonDeserializeAs(Profile, text)`: the selected type's JSON must contain
+exactly its declared fields, and the result has that nominal type. Duplicate
+JSON property names use their final value. Date/time, GUID, byte, function,
+and captured-cell values have no implicit JSON conversion; `jsonSerialize`
+rejects them. Both JSON conversion failures use `FS5016` in a script. Because
+FluidScript strings interpolate `{...}`, use `{{` and `}}` for literal JSON
+braces in source strings.
 
 ## Evaluation and control flow
 
@@ -48,7 +72,7 @@ lexical cells by reference and remain valid after the creating function exits.
 `type` declarations create nominal object types. Fields initialize in
 declaration order, constructors accept positional or named field arguments,
 and methods receive an implicit `self` parameter. Member and index assignment
-mutate the target object/array.
+mutate the target object, array, or dictionary.
 
 ## Errors and modules
 

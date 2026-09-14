@@ -54,7 +54,8 @@ public enum OpCode
     ForIncrementLocal,
     ForCheckGlobal,
     ForIncrementGlobal,
-    Halt
+    Halt,
+    MakeDictionary
 }
 
 public readonly record struct Instruction(

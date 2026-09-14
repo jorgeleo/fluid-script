@@ -10,6 +10,9 @@ public delegate FluidValue NativeFunction(IReadOnlyList<FluidValue> arguments);
 public sealed class FluidScriptHost
 {
     internal const int PrintBuiltinId = 0;
+    internal const int JsonSerializeBuiltinId = -1;
+    internal const int JsonDeserializeBuiltinId = -2;
+    internal const int JsonDeserializeAsBuiltinId = -3;
     private readonly List<NativeFunction> functions = new();
     private readonly Dictionary<string, int> names = new(StringComparer.Ordinal);
 
@@ -17,8 +20,8 @@ public sealed class FluidScriptHost
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(function);
-        if (string.Equals(name, "print", StringComparison.Ordinal))
-            throw new ArgumentException("The print builtin is reserved.", nameof(name));
+        if (IsBuiltinName(name))
+            throw new ArgumentException($"The '{name}' builtin is reserved.", nameof(name));
         if (names.ContainsKey(name))
             throw new ArgumentException($"A host function named '{name}' is already registered.", nameof(name));
 
@@ -29,6 +32,12 @@ public sealed class FluidScriptHost
     }
 
     public bool Contains(string name) => names.ContainsKey(name);
+
+    internal static bool IsBuiltinName(string name) =>
+        name is "print" or "jsonSerialize" or "jsonDeserialize" or "jsonDeserializeAs";
+
+    internal static bool IsJsonBuiltinName(string name) =>
+        name is "jsonSerialize" or "jsonDeserialize" or "jsonDeserializeAs";
 
     internal bool TryGetFunctionId(string name, out int id) => names.TryGetValue(name, out id);
 

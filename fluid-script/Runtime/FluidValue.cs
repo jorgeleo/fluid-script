@@ -15,7 +15,8 @@ public enum FluidValueKind
     Byte,
     Function,
     Object,
-    Cell
+    Cell,
+    Dictionary
 }
 
 public readonly record struct FluidValue(FluidValueKind Kind, object? Raw)
@@ -26,6 +27,7 @@ public readonly record struct FluidValue(FluidValueKind Kind, object? Raw)
     public static FluidValue From(decimal value) => new(FluidValueKind.Decimal, value);
     public static FluidValue From(string value) => new(FluidValueKind.String, value);
     public static FluidValue FromArray(IReadOnlyList<FluidValue> value) => new(FluidValueKind.Array, value);
+    public static FluidValue FromDictionary(FluidDictionary value) => new(FluidValueKind.Dictionary, value);
     public static FluidValue From(DateTimeOffset value) => new(FluidValueKind.DateTime, value);
     public static FluidValue From(Guid value) => new(FluidValueKind.Guid, value);
     public static FluidValue From(byte value) => new(FluidValueKind.Byte, value);
@@ -57,6 +59,10 @@ public readonly record struct FluidValue(FluidValueKind Kind, object? Raw)
         ? (IReadOnlyList<FluidValue>)Raw!
         : throw new InvalidOperationException("Expected an array value.");
 
+    public FluidDictionary AsDictionary() => Kind == FluidValueKind.Dictionary
+        ? (FluidDictionary)Raw!
+        : throw new InvalidOperationException("Expected a dictionary value.");
+
     public FluidObject AsObject() => Kind == FluidValueKind.Object
         ? (FluidObject)Raw!
         : throw new InvalidOperationException("Expected an object value.");
@@ -73,6 +79,7 @@ public readonly record struct FluidValue(FluidValueKind Kind, object? Raw)
         FluidValueKind.Decimal => ((decimal)Raw!).ToString(CultureInfo.InvariantCulture),
         FluidValueKind.String => AsString(),
         FluidValueKind.Array => "[" + string.Join(", ", AsArray().Select(value => value.ToString())) + "]",
+        FluidValueKind.Dictionary => AsDictionary().ToString(),
         FluidValueKind.DateTime => ((DateTimeOffset)Raw!).ToString("O", CultureInfo.InvariantCulture),
         FluidValueKind.Guid => ((Guid)Raw!).ToString("D"),
         FluidValueKind.Byte => "0x" + ((byte)Raw!).ToString("X2", CultureInfo.InvariantCulture),
@@ -104,4 +111,21 @@ public sealed class FluidObject
     public IReadOnlySet<string> ConstantFields { get; }
 
     public override string ToString() => $"{TypeName}{{{string.Join(", ", Fields.Select(field => $"{field.Key}={field.Value}"))}}}";
+}
+
+/// <summary>A mutable, ordinal string-keyed dictionary value.</summary>
+public sealed class FluidDictionary
+{
+    public FluidDictionary(IReadOnlyDictionary<string, FluidValue>? entries = null)
+    {
+        Entries = entries is null
+            ? new Dictionary<string, FluidValue>(StringComparer.Ordinal)
+            : new Dictionary<string, FluidValue>(entries, StringComparer.Ordinal);
+    }
+
+    public Dictionary<string, FluidValue> Entries { get; }
+
+    public override string ToString() => "{" + string.Join(", ", Entries
+        .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+        .Select(entry => $"\"{entry.Key}\": {entry.Value}")) + "}";
 }

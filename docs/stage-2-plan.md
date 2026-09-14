@@ -2,7 +2,7 @@
 
 Stage 1 delivered a usable source-to-P-code vertical slice: ANTLR parsing,
 source-spanned diagnostics, declarations, expressions, control flow,
-functions and closures, arrays, nominal types, exceptions, imports through an
+functions and closures, arrays, dictionaries, nominal types, exceptions, imports through an
 injected resolver, a verified stack VM, a disassembler, and deterministic
 binary P-code. Stage 2 closes the semantic and tooling gaps that remain before
 the language should be treated as complete.
@@ -120,7 +120,7 @@ incompatible bytes.
 
 Complete verifier coverage for every opcode and every operand combination,
 including handler nesting and all join depths. Add property/generated tests for
-stack effects, jump targets, array bounds, and recursive call depth. Expose
+stack effects, jump targets, array bounds, dictionary keys, and recursive call depth. Expose
 instruction, stack, call-depth, and module-load budgets in an execution policy
 object, and test deterministic faults when each limit is exceeded.
 
@@ -159,7 +159,7 @@ Decisions still needed:
   awaited language feature); and
 * capability naming/versioning and denial diagnostics.
 
-Tests must cover successful scalar/array/object arguments, wrong value kinds,
+Tests must cover successful scalar/array/dictionary/object arguments, wrong value kinds,
 missing capability IDs, duplicate/reserved names, host exceptions, and a
 function that returns `null`.
 
@@ -177,11 +177,15 @@ var output = globals["output"].AsInt();
 
 Choose and document whether an input may be missing, whether a declared
 uninitialized global remains `null`, whether output is a snapshot or a live
-reference, and how mutable arrays/objects are aliased across the boundary.
-Add tests for every `FluidValueKind`, nested arrays/objects, mutation and
+reference, and how mutable arrays/dictionaries/objects are aliased across the boundary.
+Add tests for every `FluidValueKind`, nested arrays/dictionaries/objects, mutation and
 aliasing, missing input, undeclared input, and partial state after a fault.
-If a JSON/CLR conversion helper is added, keep it outside the VM core and
-test lossless decimal, date/time, GUID, byte, and null behavior explicitly.
+`FluidJson` now explicitly round-trips JSON-native scalar, array, dictionary,
+and declared-object field values. Generic JSON objects become dictionaries;
+typed restoration is explicit and requires the JSON fields to match a declared
+type exactly. The codec rejects unsupported FluidScript value kinds rather than
+performing a lossy conversion. Keep any future CLR or extended-JSON conversion
+helper outside the VM core and test its lossless behavior explicitly.
 
 ### 3.3 C# calls into script functions
 

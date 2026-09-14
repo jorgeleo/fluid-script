@@ -25,6 +25,7 @@ operand stack and pushes its result:
 | `Call`, `CallNative` | `1 - argumentCount` |
 | `CallIndirect` | `-argumentCount` (the callable is also consumed) |
 | `MakeArray` | `1 - elementCount` |
+| `MakeDictionary` | `1 - (2 * entryCount)` |
 | `IndexGet` | `-1` |
 | `IndexSet` | `-3` |
 | `NewObject` | `1 - fieldCount` |
@@ -37,16 +38,19 @@ operand stack and pushes its result:
 | `Halt` | terminates with the optional top value |
 
 The verifier rejects underflow, inconsistent join depths, invalid constant,
-function, slot, and branch indexes, invalid call arity, and malformed array or
-loop operands. Source spans are retained on every emitted instruction so VM
+function, slot, and branch indexes, invalid call arity, and malformed array,
+dictionary, or loop operands. Source spans are retained on every emitted instruction so VM
 faults can report the originating source location.
 
 ## Calling convention
 
 Arguments are pushed left-to-right. `Call` pops them in reverse order into the
 callee's parameter slots. A callee's return value is pushed on the caller's
-stack; `ReturnVoid` produces `null`. `CallNative` currently reserves builtin
-ID 0 for `print(value)` and is intentionally capability-limited.
+stack; `ReturnVoid` produces `null`. `CallNative` reserves builtin ID `0` for
+`print(value)` and IDs `-1` and `-2` for `jsonSerialize(value)` and
+`jsonDeserialize(text)`, plus ID `-3` for `jsonDeserializeAs(Type, text)`.
+The negative IDs leave append-only host capability IDs unchanged. Other native
+calls are intentionally capability-limited.
 
 ## Compatibility
 
@@ -69,3 +73,14 @@ deserialization. A future format version must document compatibility and reject
 unknown flags rather than guessing.
 Version changes require a round-trip fixture and a compatibility decision in
 the implementation plan.
+
+`MakeDictionary` uses alternating key/value operands in source order. The VM
+requires each key to be a string and retains the final value for duplicate
+keys. Dictionary constants serialize entries in ordinal key order. The
+dictionary value kind and `MakeDictionary` opcode were appended without
+renumbering existing v0 tags or opcodes, so previously serialized modules
+remain readable; modules that contain the new opcode require a dictionary-aware
+runtime.
+
+The JSON intrinsic IDs are also stable in v0 P-code. A serialized module that
+uses them requires a runtime that implements the JSON conversion contract.

@@ -47,6 +47,45 @@ public sealed class PCodeVerifierTests
     }
 
     [TestMethod]
+    public void Verifier_rejects_invalid_dictionary_entry_counts()
+    {
+        var module = new PCodeModule(
+            Array.Empty<FluidValue>(),
+            new[]
+            {
+                new PCodeFunction("__main", 0, 0, new[]
+                {
+                    new Instruction(OpCode.MakeDictionary, -1),
+                    new Instruction(OpCode.Halt)
+                })
+            });
+
+        var diagnostics = PCodeVerifier.Verify(module);
+
+        Assert.IsTrue(diagnostics.Any(diagnostic => diagnostic.Code == "FS4004"));
+    }
+
+    [TestMethod]
+    public void Verifier_rejects_typed_json_deserialization_without_a_declared_type()
+    {
+        var module = new PCodeModule(
+            Array.Empty<FluidValue>(),
+            new[]
+            {
+                new PCodeFunction("__main", 0, 0, new[]
+                {
+                    new Instruction(OpCode.Null),
+                    new Instruction(OpCode.CallNative, -3, 1, 0),
+                    new Instruction(OpCode.Halt)
+                })
+            });
+
+        var diagnostics = PCodeVerifier.Verify(module);
+
+        Assert.IsTrue(diagnostics.Any(diagnostic => diagnostic.Code == "FS4004"));
+    }
+
+    [TestMethod]
     public void PCode_serialization_round_trips_deterministically()
     {
         var result = FluidScriptCompiler.Compile("print([1, 2][0])\n");
@@ -58,6 +97,42 @@ public sealed class PCodeVerifierTests
 
         CollectionAssert.AreEqual(first, second);
         StringAssert.Contains(PCodeDisassembler.Disassemble(restored), "IndexGet");
+    }
+
+    [TestMethod]
+    public void PCode_serialization_preserves_dictionary_constants_and_instructions()
+    {
+        var source = "type Pair\n    dim first: int\n    dim second: int\nend\ndim values = { \"second\": 2, \"first\": 1 }\ndim restored = jsonDeserializeAs(Pair, jsonSerialize(values))\nprint(restored.first)\n";
+        var result = FluidScriptCompiler.Compile(source);
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+
+        var compiledBytes = PCodeSerializer.Serialize(result.Module!, PCodeDebugInfo.None);
+        var compiled = PCodeSerializer.Deserialize(compiledBytes);
+        var output = new List<string>();
+        new VirtualMachine().Run(compiled, output.Add);
+        CollectionAssert.AreEqual(new[] { "1" }, output);
+        StringAssert.Contains(PCodeDisassembler.Disassemble(compiled), "MakeDictionary");
+
+        var first = new PCodeModule(
+            new[] { FluidValue.FromDictionary(new FluidDictionary(new Dictionary<string, FluidValue>
+            {
+                ["second"] = FluidValue.From(2L),
+                ["first"] = FluidValue.From(1L)
+            })) },
+            new[] { new PCodeFunction("__main", 0, 0, new[] { new Instruction(OpCode.Const), new Instruction(OpCode.Halt) }) });
+        var second = new PCodeModule(
+            new[] { FluidValue.FromDictionary(new FluidDictionary(new Dictionary<string, FluidValue>
+            {
+                ["first"] = FluidValue.From(1L),
+                ["second"] = FluidValue.From(2L)
+            })) },
+            new[] { new PCodeFunction("__main", 0, 0, new[] { new Instruction(OpCode.Const), new Instruction(OpCode.Halt) }) });
+
+        var firstBytes = PCodeSerializer.Serialize(first, PCodeDebugInfo.None);
+        var restored = PCodeSerializer.Deserialize(firstBytes);
+        CollectionAssert.AreEqual(firstBytes, PCodeSerializer.Serialize(second, PCodeDebugInfo.None));
+        Assert.AreEqual(FluidValueKind.Dictionary, restored.Constants.Single().Kind);
+        Assert.AreEqual(1L, restored.Constants.Single().AsDictionary().Entries["first"].AsInt());
     }
 
     [TestMethod]

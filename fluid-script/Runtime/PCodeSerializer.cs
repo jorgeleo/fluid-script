@@ -247,6 +247,15 @@ public static class PCodeSerializer
                 var array = value.AsArray(); writer.Write(array.Count);
                 foreach (var item in array) WriteValue(writer, item);
                 break;
+            case FluidValueKind.Dictionary:
+                var dictionary = value.AsDictionary().Entries;
+                writer.Write(dictionary.Count);
+                foreach (var entry in dictionary.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+                {
+                    writer.Write(entry.Key);
+                    WriteValue(writer, entry.Value);
+                }
+                break;
             default:
                 throw new InvalidDataException($"Value kind {value.Kind} cannot be a constant.");
         }
@@ -266,14 +275,25 @@ public static class PCodeSerializer
             FluidValueKind.Guid => FluidValue.From(new Guid(reader.ReadBytes(16))),
             FluidValueKind.Byte => FluidValue.From(reader.ReadByte()),
             FluidValueKind.Array => FluidValue.FromArray(Enumerable.Range(0, ReadCount(reader, "array element")).Select(_ => ReadValue(reader)).ToArray()),
+            FluidValueKind.Dictionary => ReadDictionary(reader),
             _ => throw new InvalidDataException($"Value kind {kind} is not supported.")
         };
+    }
+
+    private static FluidValue ReadDictionary(BinaryReader reader)
+    {
+        var entries = new Dictionary<string, FluidValue>(StringComparer.Ordinal);
+        var entryCount = ReadCount(reader, "dictionary entry");
+        for (var index = 0; index < entryCount; index++)
+            entries.Add(reader.ReadString(), ReadValue(reader));
+        return FluidValue.FromDictionary(new FluidDictionary(entries));
     }
 
     private static List<string> ReadStrings(BinaryReader reader, string description)
     {
         var values = new List<string>();
-        for (var index = 0; index < ReadCount(reader, description); index++)
+        var count = ReadCount(reader, description);
+        for (var index = 0; index < count; index++)
             values.Add(reader.ReadString());
         return values;
     }

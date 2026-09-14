@@ -104,7 +104,7 @@ The accepted baseline is:
   fault;
 * arguments evaluate left-to-right, positional arguments precede named
   arguments, and defaults are evaluated in the defining environment;
-* arrays, objects, and captured cells are mutable reference values;
+* arrays, dictionaries, objects, and captured cells are mutable reference values;
 * functions and lambdas use lexical scope; lambdas capture cells by reference;
 * user `type` declarations are nominal, constructors initialize fields in
   declaration order, and methods receive implicit `self`;
@@ -147,8 +147,8 @@ not language-level control flow.
 ### A8 — tagged values and explicit mutability (Accepted)
 
 `FluidValue` is the public tagged value representation for `null`, booleans,
-integers, decimals, strings, dates, GUIDs, bytes, arrays, functions, objects,
-and captured cells. Arrays and objects preserve reference identity when
+integers, decimals, strings, dates, GUIDs, bytes, arrays, dictionaries,
+functions, objects, and captured cells. Arrays, dictionaries, and objects preserve reference identity when
 mutated; captured variables use `FluidCell` so closures observe updates after
 the creating frame exits. There is no implicit CLR reflection conversion in
 the VM.
@@ -190,6 +190,8 @@ debug metadata.
 Host behavior is explicitly registered through `FluidScriptHost`. A
 `NativeFunction` receives and returns `FluidValue`; names are resolved at
 compile time to registry IDs, with ID `0` reserved for the built-in `print`.
+`jsonSerialize`, `jsonDeserialize`, and `jsonDeserializeAs` use reserved
+negative intrinsic IDs, so they do not shift append-only host capability IDs.
 The VM exposes no reflection, arbitrary method invocation, ambient I/O,
 filesystem, network, or process capability.
 
@@ -205,12 +207,16 @@ capability name/version.
 `FluidScriptExecutionContext` owns the host registry, output callback, and
 named global values. Values supplied in `Globals` initialize matching module
 global slots; successful execution writes module globals back to that same
-dictionary. `FluidValue` arrays and objects are intentionally reference values,
+dictionary. `FluidValue` arrays, dictionaries, and objects are intentionally reference values,
 so mutation/aliasing across the boundary must be documented and tested.
 
-No implicit CLR-to-script conversion is performed. If JSON or CLR conversion
-helpers are added, they live outside the VM and must define lossless behavior
-for decimal, date/time, GUID, byte, arrays, objects, and `null`.
+No implicit CLR-to-script conversion is performed. `FluidJson` is an explicit,
+standard-JSON codec for JSON-native scalars, arrays, and dictionaries; it uses
+ordinal property ordering and rejects non-JSON-native values rather than
+silently converting date/time, GUID, byte, function, or cell values lossily.
+Objects serialize their stored fields and restore to a nominal object only
+through an explicit declared type. Any future CLR or extended JSON conversion helper remains
+outside the VM and must define its own lossless behavior.
 
 ### A13 — C# invocation of script functions (Accepted, staged)
 
@@ -252,6 +258,30 @@ lightweight modular alternative with completion and lint extensions. Neither
 alternative changes the compiler or language-service contract; only the editor
 adapter changes. See the comparison and official references in
 [`docs/stage-2-plan.md`](stage-2-plan.md).
+
+### A16 — string-keyed dictionaries (Accepted)
+
+`dict` is a built-in, mutable reference type. `{ key: value }` constructs a
+dictionary after evaluating alternating key/value expressions left-to-right;
+keys must evaluate to strings, and a later duplicate key replaces an earlier
+value. `dictionary[key]` reads an existing string key, while
+`dictionary[key] = value` creates or replaces one. A non-string key faults
+with `FS5031`; an absent read faults with `FS5032`.
+
+The compiler lowers literals to `MakeDictionary`, whose entry count is
+verified before execution. `IndexGet` and `IndexSet` dispatch by target value
+kind, retaining the existing array behavior. `FluidValueKind.Dictionary` and
+`OpCode.MakeDictionary` are appended to their wire enums to preserve all
+previous v0 numeric encodings. Serialized dictionary entries are written in
+ordinal key order for deterministic payloads.
+
+`FluidJson` is the explicit standard-JSON representation for the JSON-native
+subset of `FluidValue`. It maps JSON objects to `FluidDictionary` recursively,
+preserves array order, rejects reference cycles, and writes object properties
+in ordinal order. Objects serialize their stored fields;
+`jsonDeserializeAs` restores one only when the JSON field set exactly matches
+its P-code type metadata. The JSON script intrinsics call this codec through
+reserved negative native IDs, preserving host capability numbering.
 
 ## Coding and testing policy
 

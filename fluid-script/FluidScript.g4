@@ -516,6 +516,7 @@ primaryExpression
     : literal
     | IDENTIFIER
     | arrayLiteral
+    | dictionaryLiteral
     | LPAREN expression RPAREN
     ;
 
@@ -541,6 +542,33 @@ arrayElements
     : expression
       (COMMA expression)*
       COMMA?
+    ;
+
+
+// ============================================================================
+// Dictionaries
+//
+// {}
+//
+// { "name": "Ada", "age": 40 }
+//
+// Dictionary keys are expressions here and are required to evaluate to strings
+// by the runtime. This permits computed keys while keeping dictionary access
+// consistently string-keyed.
+// ============================================================================
+
+dictionaryLiteral
+    : LBRACE dictionaryEntries? RBRACE
+    ;
+
+dictionaryEntries
+    : dictionaryEntry
+      (COMMA dictionaryEntry)*
+      COMMA?
+    ;
+
+dictionaryEntry
+    : expression COLON expression
     ;
 
 
@@ -811,6 +839,14 @@ LBRACK
 
 RBRACK
     : ']'
+    ;
+
+LBRACE
+    : '{'
+    ;
+
+RBRACE
+    : '}'
     ;
 
 

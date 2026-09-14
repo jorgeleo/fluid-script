@@ -407,7 +407,24 @@ internal sealed class SyntaxTreeBuilder
                 .ToArray() ?? Array.Empty<ExpressionNode>();
             return new ArrayNode(elements, FluidScriptFrontEnd.Span(array));
         }
+        if (context.dictionaryLiteral() is { } dictionary)
+        {
+            var entries = dictionary.dictionaryEntries()?.dictionaryEntry()
+                .Select(BuildDictionaryEntry)
+                .Where(entry => entry is not null)
+                .Cast<DictionaryEntryNode>()
+                .ToArray() ?? Array.Empty<DictionaryEntryNode>();
+            return new DictionaryNode(entries, FluidScriptFrontEnd.Span(dictionary));
+        }
         return null;
+    }
+
+    private DictionaryEntryNode? BuildDictionaryEntry(FluidScriptParser.DictionaryEntryContext context)
+    {
+        var expressions = context.expression();
+        if (expressions.Length != 2 || BuildExpression(expressions[0]) is not { } key || BuildExpression(expressions[1]) is not { } value)
+            return null;
+        return new DictionaryEntryNode(key, value, FluidScriptFrontEnd.Span(context));
     }
 
     private ExpressionNode? BuildLiteral(FluidScriptParser.LiteralContext context)

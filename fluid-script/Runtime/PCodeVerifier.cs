@@ -176,6 +176,9 @@ public static class PCodeVerifier
                 OpCode.Equal or OpCode.NotEqual or OpCode.Less or OpCode.LessOrEqual or
                 OpCode.Greater or OpCode.GreaterOrEqual => -1,
             OpCode.MakeArray => 1 - instruction.OperandA,
+            OpCode.MakeDictionary => instruction.OperandA is >= 0 and <= int.MaxValue / 2
+                ? 1 - (2 * instruction.OperandA)
+                : 0,
             OpCode.IndexGet => -1,
             OpCode.IndexSet => -3,
             OpCode.NewObject => 1 - instruction.OperandB,
@@ -199,6 +202,9 @@ public static class PCodeVerifier
             error = "Call instruction has an invalid function or arity.";
         if (instruction.OpCode == OpCode.CallNative && instruction.OperandB < 0)
             error = "Native call has an invalid argument count.";
+        if (instruction.OpCode == OpCode.CallNative && instruction.OperandA == FluidScriptHost.JsonDeserializeAsBuiltinId &&
+            (instruction.OperandB != 1 || instruction.OperandC < 0 || instruction.OperandC >= module.Types.Count))
+            error = "jsonDeserializeAs has an invalid argument count or object type.";
         if (instruction.OpCode == OpCode.CallIndirect && instruction.OperandB < 0)
             error = "Indirect call has an invalid argument count.";
         if (instruction.OpCode == OpCode.MakeClosure &&
@@ -206,6 +212,8 @@ public static class PCodeVerifier
             error = "Closure instruction has an invalid function index.";
         if (instruction.OpCode == OpCode.MakeArray && instruction.OperandA < 0)
             error = "Array instruction has an invalid element count.";
+        if (instruction.OpCode == OpCode.MakeDictionary && instruction.OperandA is < 0 or > int.MaxValue / 2)
+            error = "Dictionary instruction has an invalid entry count.";
         if (instruction.OpCode == OpCode.NewObject &&
             (instruction.OperandA < 0 || instruction.OperandA >= module.Types.Count || instruction.OperandB < 0 ||
              instruction.OperandB != module.Types[instruction.OperandA].FieldNames.Count))
@@ -238,6 +246,9 @@ public static class PCodeVerifier
             OpCode.Greater or OpCode.GreaterOrEqual => 2,
         OpCode.IndexSet => 3,
         OpCode.MakeArray => Math.Max(0, instruction.OperandA),
+        OpCode.MakeDictionary => instruction.OperandA is >= 0 and <= int.MaxValue / 2
+            ? 2 * instruction.OperandA
+            : int.MaxValue,
         OpCode.NewObject => Math.Max(0, instruction.OperandB),
         OpCode.Call or OpCode.CallNative => Math.Max(0, instruction.OperandB),
         OpCode.CallIndirect => Math.Max(0, instruction.OperandB + 1),

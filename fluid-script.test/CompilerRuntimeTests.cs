@@ -390,6 +390,118 @@ public sealed class CompilerRuntimeTests
     }
 
     [TestMethod]
+    public void Dictionary_literals_and_string_indexes_execute()
+    {
+        var output = Run("dim property = \"prop name\"\ndim dynamicProperty = \"dynamic property\"\ndim values: dict = { property: 1 }\nvalues[dynamicProperty] = 4\nvalues[property] += values[dynamicProperty]\ndim alias = values\nalias[dynamicProperty] = 5\nprint(values[property])\nprint(values[dynamicProperty])\n");
+
+        CollectionAssert.AreEqual(new[] { "5", "5" }, output);
+    }
+
+    [TestMethod]
+    public void Dictionary_indexes_reject_non_string_keys_and_missing_keys()
+    {
+        var nonStringKey = FluidScriptCompiler.Compile("dim values: dict = {}\nprint(values[1])\n");
+        Assert.IsTrue(nonStringKey.Success, string.Join("; ", nonStringKey.Diagnostics));
+        var nonStringFault = Assert.Throws<RuntimeFaultException>(() => nonStringKey.Execute());
+        Assert.AreEqual("FS5031", nonStringFault.Code);
+
+        var missingKey = FluidScriptCompiler.Compile("dim values: dict = {}\nprint(values[\"missing\"])\n");
+        Assert.IsTrue(missingKey.Success, string.Join("; ", missingKey.Diagnostics));
+        var missingKeyFault = Assert.Throws<RuntimeFaultException>(() => missingKey.Execute());
+        Assert.AreEqual("FS5032", missingKeyFault.Code);
+    }
+
+    [TestMethod]
+    public void Dictionaries_round_trip_nested_dynamic_properties_through_json()
+    {
+        var output = Run("dim values: dict = {}\nvalues[\"dynamic property\"] = { \"items\": [1, 2], \"enabled\": true }\ndim json = jsonSerialize(values)\ndim restored: dict = jsonDeserialize(json)\nrestored[\"dynamic property\"][\"items\"][1] += 3\nprint(json)\nprint(restored[\"dynamic property\"][\"items\"][1])\n");
+
+        CollectionAssert.AreEqual(new[]
+        {
+            "{\"dynamic property\":{\"enabled\":true,\"items\":[1,2]}}",
+            "5"
+        }, output);
+    }
+
+    [TestMethod]
+    public void Json_deserialization_reports_malformed_input_as_a_runtime_fault()
+    {
+        var result = FluidScriptCompiler.Compile("jsonDeserialize(\"{{\")\n");
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+
+        var fault = Assert.Throws<RuntimeFaultException>(() => result.Execute());
+
+        Assert.AreEqual("FS5016", fault.Code);
+    }
+
+    [TestMethod]
+    public void Fluid_json_converts_nested_objects_to_dictionaries_deterministically()
+    {
+        var value = FluidJson.Deserialize("{\"z\":null,\"nested\":{\"name\":\"Ada\"},\"items\":[true,1.5]}");
+
+        var dictionary = value.AsDictionary();
+        Assert.AreEqual("Ada", dictionary.Entries["nested"].AsDictionary().Entries["name"].AsString());
+        Assert.AreEqual(1.5m, dictionary.Entries["items"].AsArray()[1].AsDecimal());
+        Assert.AreEqual("{\"items\":[true,1.5],\"nested\":{\"name\":\"Ada\"},\"z\":null}", FluidJson.Serialize(value));
+    }
+
+    [TestMethod]
+    public void Fluid_json_rejects_non_json_values_and_cycles()
+    {
+        Assert.Throws<InvalidOperationException>(() => FluidJson.Serialize(FluidValue.From(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero))));
+
+        var dictionary = new FluidDictionary();
+        var value = FluidValue.FromDictionary(dictionary);
+        dictionary.Entries["self"] = value;
+
+        Assert.Throws<InvalidOperationException>(() => FluidJson.Serialize(value));
+    }
+
+    [TestMethod]
+    public void Json_intrinsics_are_reserved_without_reassigning_host_capability_ids()
+    {
+        var host = new FluidScriptHost();
+
+        Assert.AreEqual(1, host.RegisterFunction("custom", _ => FluidValue.Null));
+        Assert.Throws<ArgumentException>(() => host.RegisterFunction("jsonSerialize", _ => FluidValue.Null));
+        Assert.Throws<ArgumentException>(() => host.RegisterFunction("jsonDeserialize", _ => FluidValue.Null));
+        Assert.Throws<ArgumentException>(() => host.RegisterFunction("jsonDeserializeAs", _ => FluidValue.Null));
+    }
+
+    [TestMethod]
+    public void Json_intrinsic_names_cannot_be_declared_as_types_or_functions()
+    {
+        var result = FluidScriptCompiler.Compile("type jsonSerialize\nend\ntype jsonDeserializeAs\nend\nfunction jsonDeserialize()\nend\n");
+
+        Assert.IsFalse(result.Success);
+        CollectionAssert.AreEquivalent(new[] { "FS2200", "FS2200", "FS2007" }, result.Diagnostics.Select(diagnostic => diagnostic.Code).ToArray());
+    }
+
+    [TestMethod]
+    public void Declared_objects_round_trip_through_json_with_dynamic_dictionary_properties()
+    {
+        var output = Run("type Profile\n    dim name: string\n    dim metadata: dict\nend\ndim profile = Profile(\"Ada\", { \"preferences\": { \"theme\": \"dark\" } })\ndim json = jsonSerialize(profile)\ndim restored: Profile = jsonDeserializeAs(Profile, json)\nprint(json)\nprint(restored.name)\nprint(restored.metadata[\"preferences\"][\"theme\"])\n");
+
+        CollectionAssert.AreEqual(new[]
+        {
+            "{\"metadata\":{\"preferences\":{\"theme\":\"dark\"}},\"name\":\"Ada\"}",
+            "Ada",
+            "dark"
+        }, output);
+    }
+
+    [TestMethod]
+    public void Declared_object_deserialization_rejects_missing_or_undeclared_json_properties()
+    {
+        var result = FluidScriptCompiler.Compile("type Person\n    dim name: string\nend\ndim json = \"{{\\\"other\\\":\\\"Ada\\\"}}\"\njsonDeserializeAs(Person, json)\n");
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+
+        var fault = Assert.Throws<RuntimeFaultException>(() => result.Execute());
+
+        Assert.AreEqual("FS5016", fault.Code);
+    }
+
+    [TestMethod]
     public void Types_construct_objects_and_support_field_reads_and_writes()
     {
         var output = Run("type Person\n    dim name: string\n    dim age: int = 1\n    const kind: string = \"person\"\nend\ndim person = Person(\"Ada\", 40)\nperson.age += 1\nprint(person.name)\nprint(person.age)\nprint(person.kind)\n");

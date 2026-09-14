@@ -32,6 +32,8 @@ internal sealed record BinaryNode(ExpressionNode Left, string Operator, Expressi
 internal sealed record CallNode(ExpressionNode Target, IReadOnlyList<ArgumentNode> Arguments, SourceSpan Span) : ExpressionNode(Span);
 internal sealed record ArgumentNode(string? Name, ExpressionNode Value, SourceSpan Span);
 internal sealed record ArrayNode(IReadOnlyList<ExpressionNode> Elements, SourceSpan Span) : ExpressionNode(Span);
+internal sealed record DictionaryNode(IReadOnlyList<DictionaryEntryNode> Entries, SourceSpan Span) : ExpressionNode(Span);
+internal sealed record DictionaryEntryNode(ExpressionNode Key, ExpressionNode Value, SourceSpan Span);
 internal sealed record IndexNode(ExpressionNode Target, ExpressionNode Index, SourceSpan Span) : ExpressionNode(Span);
 internal sealed record MemberNode(ExpressionNode Target, string Name, SourceSpan Span) : ExpressionNode(Span);
 internal sealed record InterpolatedStringNode(IReadOnlyList<InterpolationPart> Parts, SourceSpan Span) : ExpressionNode(Span);

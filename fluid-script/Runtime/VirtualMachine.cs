@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using FluidScript.Parsing;
 
 namespace FluidScript.Runtime;
@@ -180,7 +181,7 @@ public sealed class VirtualMachine
                     CallIndirect(module, instruction, stack, frames, frame);
                     break;
                 case OpCode.CallNative:
-                    CallNative(instruction, stack, frame, context);
+                    CallNative(module, instruction, stack, frame, context);
                     break;
                 case OpCode.MakeClosure:
                     if (instruction.OperandA < 0 || instruction.OperandA >= module.Functions.Count)
@@ -223,6 +224,9 @@ public sealed class VirtualMachine
                     break;
                 case OpCode.MakeArray:
                     MakeArray(instruction, stack, frame);
+                    break;
+                case OpCode.MakeDictionary:
+                    MakeDictionary(instruction, stack, frame);
                     break;
                 case OpCode.IndexGet:
                     IndexGet(stack, frame);
@@ -389,7 +393,7 @@ public sealed class VirtualMachine
         frames.Add(frame);
     }
 
-    private static void CallNative(Instruction instruction, List<FluidValue> stack, Frame frame, FluidScriptExecutionContext context)
+    private static void CallNative(PCodeModule module, Instruction instruction, List<FluidValue> stack, Frame frame, FluidScriptExecutionContext context)
     {
         var arguments = new FluidValue[instruction.OperandB];
         for (var i = arguments.Length - 1; i >= 0; i--)
@@ -401,6 +405,57 @@ public sealed class VirtualMachine
                 Fault("FS2007", "print expects exactly one argument.", instruction.Span, frame.Function.Name);
             context.Output?.Invoke(arguments[0].ToString());
             Push(stack, FluidValue.Null, frame);
+            return;
+        }
+
+        if (instruction.OperandA == FluidScriptHost.JsonSerializeBuiltinId)
+        {
+            if (arguments.Length != 1)
+                Fault("FS2007", "jsonSerialize expects exactly one argument.", instruction.Span, frame.Function.Name);
+            try
+            {
+                Push(stack, FluidValue.From(FluidJson.Serialize(arguments[0])), frame);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or JsonException)
+            {
+                Fault("FS5016", $"JSON serialization failed: {exception.Message}", instruction.Span, frame.Function.Name);
+            }
+            return;
+        }
+
+        if (instruction.OperandA == FluidScriptHost.JsonDeserializeBuiltinId)
+        {
+            if (arguments.Length != 1)
+                Fault("FS2007", "jsonDeserialize expects exactly one argument.", instruction.Span, frame.Function.Name);
+            if (arguments[0].Kind != FluidValueKind.String)
+                Fault("FS5016", "jsonDeserialize requires a JSON string.", instruction.Span, frame.Function.Name);
+            try
+            {
+                Push(stack, FluidJson.Deserialize(arguments[0].AsString()), frame);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or JsonException)
+            {
+                Fault("FS5016", $"JSON deserialization failed: {exception.Message}", instruction.Span, frame.Function.Name);
+            }
+            return;
+        }
+
+        if (instruction.OperandA == FluidScriptHost.JsonDeserializeAsBuiltinId)
+        {
+            if (arguments.Length != 1)
+                Fault("FS2007", "jsonDeserializeAs expects exactly one JSON string argument.", instruction.Span, frame.Function.Name);
+            if (instruction.OperandC < 0 || instruction.OperandC >= module.Types.Count)
+                Fault("FS4004", "jsonDeserializeAs references an invalid object type.", instruction.Span, frame.Function.Name);
+            if (arguments[0].Kind != FluidValueKind.String)
+                Fault("FS5016", "jsonDeserializeAs requires a JSON string.", instruction.Span, frame.Function.Name);
+            try
+            {
+                Push(stack, FluidJson.DeserializeObject(arguments[0].AsString(), module.Types[instruction.OperandC]), frame);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or JsonException)
+            {
+                Fault("FS5016", $"JSON object deserialization failed: {exception.Message}", instruction.Span, frame.Function.Name);
+            }
             return;
         }
 
@@ -536,19 +591,54 @@ public sealed class VirtualMachine
         Push(stack, FluidValue.FromArray(elements.ToList()), frame);
     }
 
+    private static void MakeDictionary(Instruction instruction, List<FluidValue> stack, Frame frame)
+    {
+        if (instruction.OperandA < 0)
+            Fault("FS4005", "Dictionary entry count is invalid.", instruction.Span, frame.Function.Name);
+
+        var entries = new KeyValuePair<string, FluidValue>[instruction.OperandA];
+        for (var index = entries.Length - 1; index >= 0; index--)
+        {
+            var value = Pop(stack, frame);
+            var key = Pop(stack, frame);
+            if (key.Kind != FluidValueKind.String)
+                Fault("FS5031", "Dictionary keys must be strings.", instruction.Span, frame.Function.Name);
+            entries[index] = new KeyValuePair<string, FluidValue>(key.AsString(), value);
+        }
+
+        var dictionary = new Dictionary<string, FluidValue>(StringComparer.Ordinal);
+        foreach (var entry in entries)
+            dictionary[entry.Key] = entry.Value;
+        Push(stack, FluidValue.FromDictionary(new FluidDictionary(dictionary)), frame);
+    }
+
     private static void IndexGet(List<FluidValue> stack, Frame frame)
     {
         var index = Pop(stack, frame);
         var target = Pop(stack, frame);
-        if (target.Kind != FluidValueKind.Array)
-            Fault("FS5010", "Indexing requires an array.", frame.CurrentSpan, frame.Function.Name);
-        if (index.Kind != FluidValueKind.Int)
-            Fault("FS5011", "Array indexes must be integers.", frame.CurrentSpan, frame.Function.Name);
-        var items = target.AsArray();
-        var position = index.AsInt();
-        if (position < 0 || position >= items.Count)
-            Fault("FS5012", "Array index is outside the valid range.", frame.CurrentSpan, frame.Function.Name);
-        Push(stack, items[(int)position], frame);
+        if (target.Kind == FluidValueKind.Array)
+        {
+            if (index.Kind != FluidValueKind.Int)
+                Fault("FS5011", "Array indexes must be integers.", frame.CurrentSpan, frame.Function.Name);
+            var items = target.AsArray();
+            var position = index.AsInt();
+            if (position < 0 || position >= items.Count)
+                Fault("FS5012", "Array index is outside the valid range.", frame.CurrentSpan, frame.Function.Name);
+            Push(stack, items[(int)position], frame);
+            return;
+        }
+
+        if (target.Kind == FluidValueKind.Dictionary)
+        {
+            if (index.Kind != FluidValueKind.String)
+                Fault("FS5031", "Dictionary keys must be strings.", frame.CurrentSpan, frame.Function.Name);
+            if (!target.AsDictionary().Entries.TryGetValue(index.AsString(), out var value))
+                Fault("FS5032", $"Dictionary key '{index.AsString()}' is not initialized.", frame.CurrentSpan, frame.Function.Name);
+            Push(stack, value, frame);
+            return;
+        }
+
+        Fault("FS5010", "Indexing requires an array or dictionary.", frame.CurrentSpan, frame.Function.Name);
     }
 
     private static void IndexSet(List<FluidValue> stack, Frame frame)
@@ -556,20 +646,32 @@ public sealed class VirtualMachine
         var value = Pop(stack, frame);
         var index = Pop(stack, frame);
         var target = Pop(stack, frame);
-        if (target.Kind != FluidValueKind.Array)
-            Fault("FS5010", "Indexing requires an array.", frame.CurrentSpan, frame.Function.Name);
-        if (index.Kind != FluidValueKind.Int)
-            Fault("FS5011", "Array indexes must be integers.", frame.CurrentSpan, frame.Function.Name);
-        var items = target.AsArray();
-        var position = index.AsInt();
-        if (position < 0 || position >= items.Count)
-            Fault("FS5012", "Array index is outside the valid range.", frame.CurrentSpan, frame.Function.Name);
-        if (items is not IList<FluidValue> mutable)
+        if (target.Kind == FluidValueKind.Array)
         {
-            Fault("FS5013", "The array is not mutable.", frame.CurrentSpan, frame.Function.Name);
+            if (index.Kind != FluidValueKind.Int)
+                Fault("FS5011", "Array indexes must be integers.", frame.CurrentSpan, frame.Function.Name);
+            var items = target.AsArray();
+            var position = index.AsInt();
+            if (position < 0 || position >= items.Count)
+                Fault("FS5012", "Array index is outside the valid range.", frame.CurrentSpan, frame.Function.Name);
+            if (items is not IList<FluidValue> mutable)
+            {
+                Fault("FS5013", "The array is not mutable.", frame.CurrentSpan, frame.Function.Name);
+                return;
+            }
+            mutable[(int)position] = value;
             return;
         }
-        mutable[(int)position] = value;
+
+        if (target.Kind == FluidValueKind.Dictionary)
+        {
+            if (index.Kind != FluidValueKind.String)
+                Fault("FS5031", "Dictionary keys must be strings.", frame.CurrentSpan, frame.Function.Name);
+            target.AsDictionary().Entries[index.AsString()] = value;
+            return;
+        }
+
+        Fault("FS5010", "Indexing requires an array or dictionary.", frame.CurrentSpan, frame.Function.Name);
     }
 
     private static void NewObject(PCodeModule module, Instruction instruction, List<FluidValue> stack, Frame frame)

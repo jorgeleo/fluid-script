@@ -105,6 +105,11 @@ internal sealed class CompilerEngine
         var topLevelFunctions = script.Statements.OfType<FunctionNode>().ToArray();
         foreach (var type in script.Statements.OfType<TypeNode>())
         {
+            if (FluidScriptHost.IsJsonBuiltinName(type.Name))
+            {
+                Error("FS2200", $"The builtin name '{type.Name}' cannot be used as a type.", type.Span);
+                continue;
+            }
             if (typeIds.ContainsKey(type.Name))
             {
                 Error("FS2200", $"The type '{type.Name}' is declared more than once.", type.Span);
@@ -129,6 +134,11 @@ internal sealed class CompilerEngine
         functionIds["__main"] = 0;
         foreach (var function in topLevelFunctions)
         {
+            if (FluidScriptHost.IsJsonBuiltinName(function.Name))
+            {
+                Error("FS2007", $"The builtin name '{function.Name}' cannot be used as a function.", function.Span);
+                continue;
+            }
             if (functionIds.ContainsKey(function.Name))
             {
                 Error("FS2007", $"The function '{function.Name}' is declared more than once.", function.Span);
@@ -730,6 +740,7 @@ internal sealed class CompilerEngine
         "datetime" => (int)FluidValueKind.DateTime + 1,
         "guid" => (int)FluidValueKind.Guid + 1,
         "byte" => (int)FluidValueKind.Byte + 1,
+        "dict" => (int)FluidValueKind.Dictionary + 1,
         _ => (int)FluidValueKind.Object + 1
     };
 
@@ -758,6 +769,14 @@ internal sealed class CompilerEngine
                 foreach (var element in array.Elements)
                     CompileExpression(element, context, builder);
                 builder.Emit(OpCode.MakeArray, array.Elements.Count, span: array.Span);
+                break;
+            case DictionaryNode dictionary:
+                foreach (var entry in dictionary.Entries)
+                {
+                    CompileExpression(entry.Key, context, builder);
+                    CompileExpression(entry.Value, context, builder);
+                }
+                builder.Emit(OpCode.MakeDictionary, dictionary.Entries.Count, span: dictionary.Span);
                 break;
             case IndexNode index:
                 CompileExpression(index.Target, context, builder);
@@ -868,7 +887,19 @@ internal sealed class CompilerEngine
             builder.Emit(OpCode.Null, span: call.Span);
             return;
         }
-        if (functionIds.TryGetValue(target.Name, out var functionId))
+        if (target.Name == "jsonSerialize")
+        {
+            CompileBuiltinCall(call, context, builder, FluidScriptHost.JsonSerializeBuiltinId);
+        }
+        else if (target.Name == "jsonDeserialize")
+        {
+            CompileBuiltinCall(call, context, builder, FluidScriptHost.JsonDeserializeBuiltinId);
+        }
+        else if (target.Name == "jsonDeserializeAs")
+        {
+            CompileJsonDeserializeAsCall(call, context, builder);
+        }
+        else if (functionIds.TryGetValue(target.Name, out var functionId))
         {
             var function = functionDeclarations[target.Name];
             var ordered = BindArguments(function, call.Arguments, call.Span);
@@ -916,6 +947,32 @@ internal sealed class CompilerEngine
                 CompileExpression(argument.Value, context, builder);
             builder.Emit(OpCode.CallIndirect, 0, call.Arguments.Count, span: call.Span);
         }
+    }
+
+    private void CompileBuiltinCall(CallNode call, FunctionContext context, CodeBuilder builder, int builtinId)
+    {
+        foreach (var argument in call.Arguments)
+            CompileExpression(argument.Value, context, builder);
+        builder.Emit(OpCode.CallNative, builtinId, call.Arguments.Count, span: call.Span);
+    }
+
+    private void CompileJsonDeserializeAsCall(CallNode call, FunctionContext context, CodeBuilder builder)
+    {
+        if (call.Arguments.Count != 2 || call.Arguments.Any(argument => argument.Name is not null) ||
+            call.Arguments[0].Value is not NameNode typeName || !typeIds.TryGetValue(typeName.Name, out var typeId))
+        {
+            Error("FS2105", "jsonDeserializeAs expects a declared type and a JSON string.", call.Span);
+            builder.Emit(OpCode.Null, span: call.Span);
+            return;
+        }
+
+        CompileExpression(call.Arguments[1].Value, context, builder);
+        builder.Emit(new Instruction(
+            OpCode.CallNative,
+            FluidScriptHost.JsonDeserializeAsBuiltinId,
+            1,
+            typeId,
+            call.Span));
     }
 
     private LambdaCompilation CompileLambda(LambdaNode lambda, FunctionContext parent)
@@ -1037,6 +1094,13 @@ internal sealed class CompilerEngine
             case CallNode call:
                 CollectNames(call.Target, names); foreach (var argument in call.Arguments) CollectNames(argument.Value, names); break;
             case ArrayNode array: foreach (var item in array.Elements) CollectNames(item, names); break;
+            case DictionaryNode dictionary:
+                foreach (var entry in dictionary.Entries)
+                {
+                    CollectNames(entry.Key, names);
+                    CollectNames(entry.Value, names);
+                }
+                break;
             case IndexNode index: CollectNames(index.Target, names); CollectNames(index.Index, names); break;
             case MemberNode member: CollectNames(member.Target, names); break;
             case InterpolatedStringNode interpolated:
@@ -1321,8 +1385,8 @@ internal sealed class CompilerEngine
         }
         var baseName = normalized.TrimEnd('[', ']');
         var isArray = normalized.EndsWith("[]", StringComparison.Ordinal);
-        if (baseName is not ("any" or "null" or "bool" or "int" or "decimal" or "string" or "datetime" or "guid" or "byte") &&
-            !functionIds.ContainsKey(baseName))
+        if (baseName is not ("any" or "null" or "bool" or "int" or "decimal" or "string" or "datetime" or "guid" or "byte" or "dict") &&
+            !typeIds.ContainsKey(baseName))
             Error("FS2100", $"Unknown type '{baseName}'.", span);
         return isArray ? baseName + "[]" : baseName;
     }
@@ -1353,6 +1417,7 @@ internal sealed class CompilerEngine
         },
         NameNode name => context.ResolveType(name.Name) ?? (globalTypes.TryGetValue(name.Name, out var globalType) ? globalType : "any"),
         ArrayNode array => array.Elements.Count == 0 ? "any[]" : InferArrayType(array.Elements, context),
+        DictionaryNode => "dict",
         IndexNode index => InferIndexedType(InferType(index.Target, context)),
         MemberNode member => InferMemberType(member, context),
         UnaryNode unary when unary.Operator == "!" => "bool",
@@ -1362,6 +1427,10 @@ internal sealed class CompilerEngine
         BinaryNode binary => InferNumericType(InferType(binary.Left, context), InferType(binary.Right, context)),
         CallNode call when call.Target is NameNode name && functionReturnTypes.TryGetValue(name.Name, out var returnType) => returnType,
         CallNode call when call.Target is NameNode { Name: "print" } => "null",
+        CallNode call when call.Target is NameNode { Name: "jsonSerialize" } => "string",
+        CallNode call when call.Target is NameNode { Name: "jsonDeserialize" } => "any",
+        CallNode call when call.Target is NameNode { Name: "jsonDeserializeAs" } &&
+            call.Arguments.Count > 0 && call.Arguments[0].Value is NameNode typeName && typeIds.ContainsKey(typeName.Name) => typeName.Name,
         CallNode call when call.Target is NameNode name && typeIds.ContainsKey(name.Name) => name.Name,
         CallNode call when call.Target is MemberNode member && functionReturnTypes.TryGetValue(MethodKey(InferType(member.Target, context), member.Name), out var methodReturnType) => methodReturnType,
         LambdaNode => "fn",

@@ -15,6 +15,14 @@ public sealed class ParsingTests
     }
 
     [TestMethod]
+    public void Front_end_accepts_dictionary_literals_with_computed_keys()
+    {
+        var result = FluidScriptFrontEnd.Parse("dim prefix = \"user.\"\ndim values = { prefix + \"name\": \"Ada\", \"age\": 40 }\n");
+
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+    }
+
+    [TestMethod]
     public void Front_end_reports_syntax_errors_with_stable_source_spans()
     {
         var result = FluidScriptFrontEnd.Parse("dim value = 1 dim other = 2\n");
