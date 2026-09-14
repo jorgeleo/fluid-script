@@ -109,6 +109,8 @@ public sealed class PCodeModule
     public int GlobalCount { get; internal set; }
     public IReadOnlyList<string> GlobalNames { get; internal set; } = Array.Empty<string>();
     public IReadOnlyList<PCodeType> Types { get; internal set; } = Array.Empty<PCodeType>();
+    /// <summary>SHA-256 of the exact UTF-8 source text used to compile this module.</summary>
+    public ReadOnlyMemory<byte> SourceHash { get; internal set; }
 }
 
 public sealed class PCodeType

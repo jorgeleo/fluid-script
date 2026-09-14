@@ -50,9 +50,22 @@ ID 0 for `print(value)` and is intentionally capability-limited.
 
 ## Compatibility
 
-`PCodeSerializer` provides a deterministic version-0 binary form with a magic
-value, explicit version, endianness-independent primitive encodings, and
-metadata for constants, functions, captures, types, globals, instructions,
-and source spans. Deserialization verifies the module before returning it.
+`PCodeSerializer` provides two deterministic version-0 binary forms with a
+magic value, explicit version, a debug-information flag, endianness-independent
+primitive encodings, and metadata for constants, functions, captures, types,
+globals, and instructions:
+
+* `PCodeDebugInfo.SourceSpans` retains line/column/length on every instruction
+  for diagnostics, disassembly, and future breakpoints. Its header also stores
+  a SHA-256 hash of the exact UTF-8 source text used to compile the module.
+* `PCodeDebugInfo.None` omits source-span payloads for a smaller distribution
+  form and carries no source hash; deserialization restores `SourceSpan.None`.
+
+`PCodeSerializer.Serialize(module)` remains the debug form for compatibility.
+Use `PCodeSerializer.Deserialize(bytes, sourceText)` or
+`PCodeSerializer.SourceHashMatches(module, sourceText)` to verify that debug
+spans belong to the source currently displayed. Both forms are verified during
+deserialization. A future format version must document compatibility and reject
+unknown flags rather than guessing.
 Version changes require a round-trip fixture and a compatibility decision in
 the implementation plan.

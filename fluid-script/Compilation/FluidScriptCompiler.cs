@@ -5,46 +5,67 @@ namespace FluidScript.Compilation;
 
 public sealed class CompilationResult
 {
-    internal CompilationResult(PCodeModule? module, IReadOnlyList<Diagnostic> diagnostics)
+    internal CompilationResult(PCodeModule? module, IReadOnlyList<Diagnostic> diagnostics, FluidScriptHost? host = null)
     {
         Module = module;
         Diagnostics = diagnostics;
+        Host = host;
     }
 
     public PCodeModule? Module { get; }
     public IReadOnlyList<Diagnostic> Diagnostics { get; }
+    /// <summary>The host registry used to bind host function names, if any.</summary>
+    public FluidScriptHost? Host { get; }
     public bool Success => Module is not null && Diagnostics.All(d => d.Severity != DiagnosticSeverity.Error);
 
     public FluidValue Execute(Action<string>? output = null, int instructionLimit = 1_000_000)
     {
         if (!Success)
             throw new InvalidOperationException("The source did not compile: " + string.Join("; ", Diagnostics));
-        return new VirtualMachine().Run(Module!, output, instructionLimit);
+        return new VirtualMachine().Run(Module!, new FluidScriptExecutionContext(Host, output: output), instructionLimit);
+    }
+
+    public FluidValue Execute(FluidScriptExecutionContext context, int instructionLimit = 1_000_000)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (!Success)
+            throw new InvalidOperationException("The source did not compile: " + string.Join("; ", Diagnostics));
+        return new VirtualMachine().Run(Module!, context, instructionLimit);
     }
 }
 
 public static class FluidScriptCompiler
 {
     public static CompilationResult Compile(string source, IFluidModuleResolver? resolver = null)
-        => CompileCore(source, resolver, new ModuleCompilationSession());
+        => CompileCore(source, resolver, null, new ModuleCompilationSession());
+
+    public static CompilationResult Compile(string source, FluidScriptHost host, IFluidModuleResolver? resolver = null)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        return CompileCore(source, resolver, host, new ModuleCompilationSession());
+    }
 
     internal static CompilationResult CompileCore(string source, IFluidModuleResolver? resolver, ModuleCompilationSession session)
+        => CompileCore(source, resolver, null, session);
+
+    internal static CompilationResult CompileCore(string source, IFluidModuleResolver? resolver, FluidScriptHost? host, ModuleCompilationSession session)
     {
         var parse = FluidScriptFrontEnd.Parse(source);
         if (!parse.Success || parse.Program is null)
-            return new CompilationResult(null, parse.Diagnostics);
+            return new CompilationResult(null, parse.Diagnostics, host);
 
         var builder = new SyntaxTreeBuilder();
         var script = builder.Build(parse.Program);
         if (builder.Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
-            return new CompilationResult(null, builder.Diagnostics);
+            return new CompilationResult(null, builder.Diagnostics, host);
 
-        var engine = new CompilerEngine(resolver, session);
+        var engine = new CompilerEngine(resolver, session, host);
         var module = engine.Compile(script);
+        module.SourceHash = PCodeSerializer.ComputeSourceHash(source);
         var diagnostics = parse.Diagnostics.Concat(builder.Diagnostics).Concat(engine.Diagnostics).ToArray();
         return diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error)
-            ? new CompilationResult(null, diagnostics)
-            : new CompilationResult(module, diagnostics);
+            ? new CompilationResult(null, diagnostics, host)
+            : new CompilationResult(module, diagnostics, host);
     }
 }
 
@@ -52,6 +73,7 @@ internal sealed class CompilerEngine
 {
     private readonly IFluidModuleResolver? resolver;
     private readonly ModuleCompilationSession session;
+    private readonly FluidScriptHost? host;
     private readonly List<Diagnostic> diagnostics = new();
     private readonly Dictionary<string, int> globalSlots = new(StringComparer.Ordinal);
     private readonly HashSet<string> globalConstants = new(StringComparer.Ordinal);
@@ -69,10 +91,11 @@ internal sealed class CompilerEngine
     private readonly List<FluidValue> constants = new();
     private readonly List<string> globalNames = new();
 
-    public CompilerEngine(IFluidModuleResolver? resolver = null, ModuleCompilationSession? session = null)
+    public CompilerEngine(IFluidModuleResolver? resolver = null, ModuleCompilationSession? session = null, FluidScriptHost? host = null)
     {
         this.resolver = resolver;
         this.session = session ?? new ModuleCompilationSession();
+        this.host = host;
     }
 
     public IReadOnlyList<Diagnostic> Diagnostics => diagnostics;
@@ -360,7 +383,15 @@ internal sealed class CompilerEngine
         {
             case VariableNode variable:
                 if (variable.Initializer is null)
-                    builder.Emit(OpCode.Null, span: variable.Span);
+                {
+                    // Main-scope globals are already initialized to null by the VM.
+                    // Leaving the slot untouched also permits an embedding host to
+                    // provide an input value through FluidScriptExecutionContext.
+                    if (!context.IsMain)
+                        builder.Emit(OpCode.Null, span: variable.Span);
+                    else
+                        return;
+                }
                 else
                 {
                     var inferredType = InferType(variable.Initializer, context);
@@ -682,7 +713,7 @@ internal sealed class CompilerEngine
                 Error("FS2303", $"Module import cycle detected at '{import.Name}'.", import.Span);
             return;
         }
-        var imported = FluidScriptCompiler.CompileCore(source, resolver, session);
+        var imported = FluidScriptCompiler.CompileCore(source, resolver, host, session);
         session.Exit(import.Name, imported.Success);
         foreach (var diagnostic in imported.Diagnostics)
             diagnostics.Add(diagnostic with { Code = diagnostic.Code == "FS2301" ? "FS2303" : diagnostic.Code });
@@ -865,6 +896,12 @@ internal sealed class CompilerEngine
             foreach (var argument in call.Arguments)
                 CompileExpression(argument.Value, context, builder);
             builder.Emit(OpCode.CallNative, 0, call.Arguments.Count, span: call.Span);
+        }
+        else if (host is not null && host.TryGetFunctionId(target.Name, out var nativeId))
+        {
+            foreach (var argument in call.Arguments)
+                CompileExpression(argument.Value, context, builder);
+            builder.Emit(OpCode.CallNative, nativeId, call.Arguments.Count, span: call.Span);
         }
         else
         {

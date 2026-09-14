@@ -460,6 +460,103 @@ public sealed class CompilerRuntimeTests
         Assert.AreEqual(1, fault.Span.Line);
     }
 
+    [TestMethod]
+    public void Host_functions_are_explicit_capabilities_with_fluid_values()
+    {
+        var host = new FluidScriptHost();
+        host.RegisterFunction("add", arguments =>
+            FluidValue.From(arguments[0].AsInt() + arguments[1].AsInt()));
+        var result = FluidScriptCompiler.Compile("print(add(2, 3))\n", host);
+        var output = new List<string>();
+
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+        result.Execute(new FluidScriptExecutionContext(host, output: output.Add));
+
+        CollectionAssert.AreEqual(new[] { "5" }, output);
+    }
+
+    [TestMethod]
+    public void Execution_context_passes_globals_in_and_out()
+    {
+        var result = FluidScriptCompiler.Compile("dim input: int\ndim output: int\noutput = input * 2\n");
+        var globals = new Dictionary<string, FluidValue>(StringComparer.Ordinal)
+        {
+            ["input"] = FluidValue.From(21L)
+        };
+
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+        result.Execute(new FluidScriptExecutionContext(globals: globals));
+
+        Assert.AreEqual(42L, globals["output"].AsInt());
+    }
+
+    [TestMethod]
+    public void CSharp_can_invoke_a_script_defined_function()
+    {
+        var result = FluidScriptCompiler.Compile("function multiply(a: int, b: int): int\n    return a * b\nend\n");
+
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+        var value = new VirtualMachine().Invoke(
+            result.Module!,
+            "multiply",
+            new[] { FluidValue.From(6L), FluidValue.From(7L) });
+
+        Assert.AreEqual(42L, value.AsInt());
+    }
+
+    [TestMethod]
+    public void Script_function_invocation_can_use_context_globals()
+    {
+        var result = FluidScriptCompiler.Compile("dim factor: int\nfunction scale(value: int): int\n    return value * factor\nend\n");
+        var context = new FluidScriptExecutionContext(globals: new Dictionary<string, FluidValue>
+        {
+            ["factor"] = FluidValue.From(3L)
+        });
+
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+        var value = new VirtualMachine().Invoke(
+            result.Module!, "scale", new[] { FluidValue.From(4L) }, context);
+
+        Assert.AreEqual(12L, value.AsInt());
+    }
+
+    [TestMethod]
+    public void Missing_host_capability_is_a_runtime_fault()
+    {
+        var registered = new FluidScriptHost();
+        registered.RegisterFunction("answer", _ => FluidValue.From(42L));
+        var result = FluidScriptCompiler.Compile("print(answer())\n", registered);
+        var untrustedContext = new FluidScriptExecutionContext(new FluidScriptHost());
+
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+        var fault = Assert.Throws<RuntimeFaultException>(() => result.Execute(untrustedContext));
+
+        Assert.AreEqual("FS2006", fault.Code);
+    }
+
+    [TestMethod]
+    public void Host_function_failures_are_reported_as_script_faults()
+    {
+        var host = new FluidScriptHost();
+        host.RegisterFunction("needsInt", arguments => FluidValue.From(arguments[0].AsInt()));
+        var result = FluidScriptCompiler.Compile("needsInt(\"not an int\")\n", host);
+
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+        var fault = Assert.Throws<RuntimeFaultException>(() => result.Execute());
+
+        Assert.AreEqual("FS5015", fault.Code);
+    }
+
+    [TestMethod]
+    public void Invoking_a_missing_script_function_or_wrong_arity_is_rejected()
+    {
+        var result = FluidScriptCompiler.Compile("function identity(value: int): int\n    return value\nend\n");
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+
+        Assert.Throws<ArgumentException>(() => new VirtualMachine().Invoke(result.Module!, "missing"));
+        Assert.Throws<ArgumentException>(() => new VirtualMachine().Invoke(result.Module!, "identity", Array.Empty<FluidValue>()));
+    }
+
     private static List<string> Run(string source)
     {
         var result = FluidScriptCompiler.Compile(source);

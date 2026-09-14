@@ -3,26 +3,67 @@ using FluidScript.Parsing;
 
 namespace FluidScript.Runtime;
 
-public delegate FluidValue NativeFunction(IReadOnlyList<FluidValue> arguments);
-
 public sealed class VirtualMachine
 {
-    private const int PrintBuiltin = 0;
     private const int MaxStack = 100_000;
     private const int MaxCallDepth = 1_024;
 
     public FluidValue Run(PCodeModule module, Action<string>? output = null, int instructionLimit = 1_000_000)
+        => Run(module, new FluidScriptExecutionContext(output: output), instructionLimit);
+
+    public FluidValue Run(PCodeModule module, FluidScriptExecutionContext context, int instructionLimit = 1_000_000)
     {
         ArgumentNullException.ThrowIfNull(module);
+        ArgumentNullException.ThrowIfNull(context);
         if (module.EntryFunction < 0 || module.EntryFunction >= module.Functions.Count)
             throw new ArgumentException("The P-code entry function is invalid.", nameof(module));
 
         var globals = Enumerable.Repeat(FluidValue.Null, module.GlobalCount).ToArray();
+        LoadGlobals(module, globals, context);
+        return Execute(module, module.EntryFunction, Array.Empty<FluidValue>(), globals, context, instructionLimit);
+    }
+
+    /// <summary>Invokes a named script function from C#, returning its FluidValue result.</summary>
+    public FluidValue Invoke(
+        PCodeModule module,
+        string functionName,
+        IReadOnlyList<FluidValue>? arguments = null,
+        FluidScriptExecutionContext? context = null,
+        int instructionLimit = 1_000_000)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrWhiteSpace(functionName);
+        var functionId = module.Functions
+            .Select((function, index) => (function, index))
+            .FirstOrDefault(item => string.Equals(item.function.Name, functionName, StringComparison.Ordinal)).index;
+        if (functionId < 0 || functionId >= module.Functions.Count ||
+            !string.Equals(module.Functions[functionId].Name, functionName, StringComparison.Ordinal))
+            throw new ArgumentException($"The script function '{functionName}' was not found.", nameof(functionName));
+
+        context ??= new FluidScriptExecutionContext();
+        var globals = Enumerable.Repeat(FluidValue.Null, module.GlobalCount).ToArray();
+        LoadGlobals(module, globals, context);
+        return Execute(module, functionId, arguments ?? Array.Empty<FluidValue>(), globals, context, instructionLimit);
+    }
+
+    private static FluidValue Execute(
+        PCodeModule module,
+        int functionId,
+        IReadOnlyList<FluidValue> arguments,
+        FluidValue[] globals,
+        FluidScriptExecutionContext context,
+        int instructionLimit)
+    {
+        var entry = module.Functions[functionId];
+        if (arguments.Count != entry.Arity)
+            throw new ArgumentException($"Function '{entry.Name}' expects {entry.Arity} arguments, but received {arguments.Count}.", nameof(arguments));
         var stack = new List<FluidValue>();
         var frames = new List<Frame>
         {
-            new(module.Functions[module.EntryFunction], module.Functions[module.EntryFunction].LocalCount, 0, 0, null)
+            new(entry, entry.LocalCount, 0, 0, null)
         };
+        for (var index = 0; index < arguments.Count; index++)
+            frames[0].Locals[index].Value = arguments[index];
         var steps = 0;
 
         while (frames.Count > 0)
@@ -139,7 +180,7 @@ public sealed class VirtualMachine
                     CallIndirect(module, instruction, stack, frames, frame);
                     break;
                 case OpCode.CallNative:
-                    CallNative(instruction, stack, frame, output);
+                    CallNative(instruction, stack, frame, context);
                     break;
                 case OpCode.MakeClosure:
                     if (instruction.OperandA < 0 || instruction.OperandA >= module.Functions.Count)
@@ -164,10 +205,21 @@ public sealed class VirtualMachine
                     FieldSet(module, instruction, stack, frame);
                     break;
                 case OpCode.Return:
-                    Return(stack, frames, Pop(stack, frame));
+                    var returnValue = Pop(stack, frame);
+                    Return(stack, frames, returnValue);
+                    if (frames.Count == 0)
+                    {
+                        SaveGlobals(module, globals, context);
+                        return returnValue;
+                    }
                     break;
                 case OpCode.ReturnVoid:
                     Return(stack, frames, FluidValue.Null);
+                    if (frames.Count == 0)
+                    {
+                        SaveGlobals(module, globals, context);
+                        return FluidValue.Null;
+                    }
                     break;
                 case OpCode.MakeArray:
                     MakeArray(instruction, stack, frame);
@@ -191,7 +243,9 @@ public sealed class VirtualMachine
                     ForIncrementGlobal(globals, frame, instruction);
                     break;
                 case OpCode.Halt:
-                    return stack.Count == 0 ? FluidValue.Null : Pop(stack, frame);
+                    var haltValue = stack.Count == 0 ? FluidValue.Null : Pop(stack, frame);
+                    SaveGlobals(module, globals, context);
+                    return haltValue;
                     case OpCode.EnterHandler:
                         if (instruction.OperandA < 0 || instruction.OperandA >= frame.Function.Instructions.Count)
                             Fault("FS4007", "Exception handler target is invalid.", instruction.Span, frame.Function.Name);
@@ -225,6 +279,19 @@ public sealed class VirtualMachine
         }
 
         return FluidValue.Null;
+    }
+
+    private static void LoadGlobals(PCodeModule module, FluidValue[] globals, FluidScriptExecutionContext context)
+    {
+        foreach (var (name, index) in module.GlobalNames.Select((name, index) => (name, index)))
+            if (context.Globals.TryGetValue(name, out var value))
+                globals[index] = value;
+    }
+
+    private static void SaveGlobals(PCodeModule module, FluidValue[] globals, FluidScriptExecutionContext context)
+    {
+        foreach (var (name, index) in module.GlobalNames.Select((name, index) => (name, index)))
+            context.Globals[name] = globals[index];
     }
 
     private static bool HandleFault(RuntimeFaultException fault, List<Frame> frames, List<FluidValue> stack)
@@ -322,19 +389,37 @@ public sealed class VirtualMachine
         frames.Add(frame);
     }
 
-    private static void CallNative(Instruction instruction, List<FluidValue> stack, Frame frame, Action<string>? output)
+    private static void CallNative(Instruction instruction, List<FluidValue> stack, Frame frame, FluidScriptExecutionContext context)
     {
         var arguments = new FluidValue[instruction.OperandB];
         for (var i = arguments.Length - 1; i >= 0; i--)
             arguments[i] = Pop(stack, frame);
 
-        if (instruction.OperandA != PrintBuiltin)
-            Fault("FS2006", "The native builtin is not registered.", instruction.Span, frame.Function.Name);
-        if (arguments.Length != 1)
-            Fault("FS2007", "print expects exactly one argument.", instruction.Span, frame.Function.Name);
+        if (instruction.OperandA == FluidScriptHost.PrintBuiltinId)
+        {
+            if (arguments.Length != 1)
+                Fault("FS2007", "print expects exactly one argument.", instruction.Span, frame.Function.Name);
+            context.Output?.Invoke(arguments[0].ToString());
+            Push(stack, FluidValue.Null, frame);
+            return;
+        }
 
-        output?.Invoke(arguments[0].ToString());
-        Push(stack, FluidValue.Null, frame);
+        NativeFunction? function = null;
+        if (context.Host is null || !context.Host.TryGetFunction(instruction.OperandA, out function) || function is null)
+            Fault("FS2006", "The native builtin is not registered.", instruction.Span, frame.Function.Name);
+
+        try
+        {
+            Push(stack, function!(arguments), frame);
+        }
+        catch (RuntimeFaultException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new RuntimeFaultException("FS5015", $"Host function failed: {exception.Message}", instruction.Span, frame.Function.Name);
+        }
     }
 
     private static void Return(List<FluidValue> stack, List<Frame> frames, FluidValue value)

@@ -326,11 +326,16 @@ if/while/for/switch, break/continue, arrays and evaluate-once index mutation,
 functions with recursion/forward calls/defaults/named arguments, cell-backed
 closures, nominal field-based types and implicit-`self` methods, interpolation,
 throw/try/catch/finally unwinding, P-code verification/disassembly, and binary
-P-code round trips. Imports now have an explicit resolver boundary and stable
-missing-resolver/unresolved-module diagnostics.
+P-code round trips. The runtime boundary also supports explicit C# host
+functions, named global input/output values, and C# invocation of script
+functions. P-code can be serialized with source spans for diagnostics or in a
+compact form without debug information. Imports now have an explicit resolver
+boundary and stable missing-resolver/unresolved-module diagnostics.
 
 The remaining work is intentionally visible rather than implied complete:
-full static type inference, nested-function/method closures and capture-aware function types,
-return/break/continue finally unwinding, module
-export namespaces/cycle detection/cache, richer host capabilities, and the
-remaining malformed-token/property/fuzz/mutation fixtures from the matrix.
+full static type inference, nested-function/method closures and capture-aware
+function types, return/break/continue finally unwinding, module export
+namespaces/cycle detection/cache, richer host conversion/capability policies,
+editor/language-service integration, and the remaining malformed-token,
+property/fuzz/mutation fixtures from the matrix. See
+`docs/stage-2-plan.md` for the proposed implementation and discussion order.
