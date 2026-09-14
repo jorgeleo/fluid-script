@@ -6,4 +6,18 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Antlr4.Runtime.Standard" Version="4.13.1" />
+    <PackageReference Include="Antlr4BuildTasks" Version="12.14" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Antlr4 Include="FluidScript.g4">
+      <Listener>false</Listener>
+      <Visitor>true</Visitor>
+      <Error>true</Error>
+      <Package>FluidScript.Generated</Package>
+    </Antlr4>
+  </ItemGroup>
+
 </Project>

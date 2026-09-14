@@ -864,15 +864,35 @@ fragment HEX
     : [0-9a-fA-F]
     ;
 
+fragment DIGIT2
+    : DIGIT DIGIT
+    ;
+
+fragment DIGIT4
+    : DIGIT DIGIT DIGIT DIGIT
+    ;
+
+fragment HEX4
+    : HEX HEX HEX HEX
+    ;
+
+fragment HEX8
+    : HEX4 HEX4
+    ;
+
+fragment HEX12
+    : HEX4 HEX4 HEX4
+    ;
+
 DATETIME
     : '#'
-      DIGIT{4} '-' DIGIT{2} '-' DIGIT{2}
-      (('T' | ' ') DIGIT{2} ':' DIGIT{2} ':' DIGIT{2} ('.' DIGIT+)? (('Z') | ([+-] DIGIT{2} ':' DIGIT{2}))?)?
+      DIGIT4 '-' DIGIT2 '-' DIGIT2
+      (('T' | ' ') DIGIT2 ':' DIGIT2 ':' DIGIT2 ('.' DIGIT+)? (('Z') | ([+-] DIGIT2 ':' DIGIT2))?)?
       '#'
     ;
 
 GUID
-    : '{' HEX{8} '-' HEX{4} '-' HEX{4} '-' HEX{4} '-' HEX{12} '}'
+    : '{' HEX8 '-' HEX4 '-' HEX4 '-' HEX4 '-' HEX12 '}'
     ;
 
 BYTE

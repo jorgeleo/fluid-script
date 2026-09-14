@@ -1,161 +1,316 @@
-# FluidScript: minimal P-code compiler and VM plan
+# FluidScript complete implementation plan
 
-## Purpose and v1 boundary
+## Objective
 
-Build a small, deterministic FluidScript implementation that accepts a useful
-subset of `fluid-script/fluidscript.g4`, emits inspectable stack-based P-code,
-and executes it in an embedded VM. The first release is deliberately not a
-complete implementation of every construct accepted by the grammar.
+Implement every construct accepted by `fluid-script/FluidScript.g4` as a
+defined, tested language. The implementation consists of an ANTLR front end,
+an AST and semantic compiler, versioned stack-based P-code, a verified VM, and
+an explicit host/module boundary.
 
-The compiler must parse the existing grammar, then issue source-spanned
-diagnostics for syntactically valid features outside the selected v1 scope. It
-must never emit partial or silently incorrect behavior for an unsupported
-node.
+The grammar is the syntax contract. It is not, by itself, the language
+contract: all runtime values, typing, scope, evaluation order, error behavior,
+module behavior, and object behavior must be written down before the relevant
+feature is marked complete.
 
-### Supported in v1
+The project targets the existing .NET 10 library and MSTest project. Generated
+ANTLR sources remain build outputs; language/compiler/runtime tests are source
+controlled.
 
-* Values: `int`, exact `decimal`, `string`, `bool`, and `null`.
-* Statements: `dim`, `const`, assignment to an identifier, expression
-  statements, `if`/`else`, `while`, `for`, `break`, `continue`, function
-  declarations, and `return`.
-* Expressions: literals, identifiers, parentheses, arithmetic, comparison,
-  equality, unary operators, and short-circuit `&&`/`||`.
-* Calls: direct calls to top-level functions and a registered, explicit host
-  builtin such as `print`.
-* Type hints: parsed and retained in the AST, but not enforced in v1.
+## Non-negotiable TDD policy
 
-### Parsed but rejected in v1
+Every feature follows this loop:
 
-Arrays and indexing, member access, lambdas/closures, `switch`, user `type`
-declarations, imports, exceptions, named/default arguments, and type hints
-that require a type system. The diagnostic should name the feature and its
-source span, for example `FS3001: Lambda expressions are not supported by
-P-code v1.`
+1. Add a failing test that demonstrates one happy path and at least one
+   expected failure.
+2. Implement the smallest parser, AST, binder, compiler, P-code, or VM change
+   that makes the tests pass.
+3. Refactor with the tests green, preserving source spans and diagnostics.
+4. Add regression cases for every defect found.
 
-Treat braces in strings literally in v1. The grammar notes an intent to add
-interpolation, but it defines no interpolation syntax or escaping semantics.
+No feature is complete because it parses or because its happy path runs. Its
+completion record must link to:
 
-## Language rules to freeze before code generation
+* parser/AST tests for valid and invalid syntax;
+* binder/type-checker tests for valid and invalid programs;
+* P-code golden tests and verifier failure tests;
+* VM/runtime tests for normal results and runtime faults; and
+* end-to-end tests compiling source and observing the specified result/output.
 
-Record the following in `docs/language-v1.md` before the compiler is exposed
-as a public API:
+Expected failures must assert the diagnostic code, relevant source span, and
+stable message/category. Runtime failures must assert the runtime error kind,
+function, instruction/source location, and that the VM terminates cleanly.
 
-* The required newline or semicolon before `end`; the grammar requires a
-  statement separator after each statement in a block.
-* Lexical scope and shadowing rules; `dim` without an initializer receives
-  `null`, and undeclared assignment is an error.
-* Constants are immutable after their declaration.
-* Conditions require `bool`; there is no truthiness in v1.
-* Integer/decimal promotion, string concatenation rules, equality, overflow,
-  divide-by-zero, and modulo behavior.
-* `for` evaluates start, end, and step once; a zero step faults; the test is
-  inclusive and follows the sign of the step.
-* Functions can call preceding or following top-level functions and themselves;
-  functions have no closures in v1.
-* Runtime errors contain source location, function name, and instruction
-  position.
+## Language contract to define first
 
-The grammar permits `try` with neither `catch` nor `finally`; v1 rejects all
-exception handling. Revisit this grammar rule when exceptions are designed.
+Create `docs/language.md` as the normative semantic specification. Resolve
+these decisions before implementing dependent features:
 
-## Project layout
+* Source is UTF-8; identifiers and keywords are case-sensitive. Newlines and
+  semicolons are separators, while spaces and comments are ignored. A block
+  statement must have its separator before `end`, as required by `block`.
+* `dim` without an initializer starts as `null`; declarations use lexical
+  scopes. Shadowing is allowed only in nested scopes, not within one scope.
+  Assignment never implicitly declares a name.
+* `const` is immutable after initialization. Its initializer is evaluated once
+  in declaration order.
+* Type hints are checked statically. An unannotated value has type `any`; an
+  `any` value receives runtime operation checks. Built-ins include `int`,
+  `decimal`, `string`, `bool`, `datetime`, `guid`, `byte`, `null`, and `any`.
+  Array and function types are structural; user types are nominal.
+* Define integer width/overflow, decimal precision, numeric promotion, string
+  concatenation, equality identity/value rules, nullability, and conversion
+  rules. Division/modulo by zero and invalid conversions are explicit faults.
+* `if`/`while` conditions require `bool`; there is no implicit truthiness.
+  `for` evaluates start, end, and step once, is inclusive, follows the sign of
+  step, and faults on zero step. Its counter is scoped to the loop.
+* Function arguments are evaluated left-to-right. Positional arguments precede
+  named arguments; named arguments must be unique and known. Defaults are
+  evaluated at call time in the function's defining environment. Return type
+  and missing-return rules are defined for annotated and unannotated functions.
+* Lambdas capture lexical cells by reference, retain those cells after the
+  creating function returns, and have the same argument/default/type rules as
+  named functions.
+* `type` declarations create nominal object types with fields, constants, and
+  methods. A call to a type is its constructor: fields initialize in
+  declaration order, constructor arguments may be positional or named, and
+  methods receive an implicit `self`.
+* Arrays are mutable, zero-based, ordered values. Indexing faults on a
+  non-array or out-of-range index; assignment through an index mutates the
+  array. Nested arrays are ordinary values.
+* `switch` evaluates its selector once, compares cases in source order, runs
+  at most one case, and never falls through. `otherwise` is optional.
+* `try` without `catch` or `finally` is valid per the grammar and simply lets
+  faults propagate. `catch` binds the thrown value when it names a variable;
+  an optional type hint filters matching exceptions. `finally` always runs,
+  including during return, break, continue, and rethrow.
+* `import qualified.name` and `import "path"` resolve through an injected
+  module loader. Modules execute once, expose an explicit export namespace,
+  reject cycles with a diagnostic, and cannot access the host except through
+  registered capabilities.
+* Strings decode the declared escapes. Unescaped `{expression}` segments are
+  interpolated after parsing the string token; `{{` and `}}` represent literal
+  braces, and unmatched interpolation braces are compile errors.
+
+If product requirements choose different rules, update this document and the
+tests before changing code.
+
+## Complete grammar feature inventory and TDD acceptance matrix
+
+Each row is a required test group. The examples are representative; the test
+data must include nesting, boundary values, and source-location assertions.
+
+| Grammar feature | Happy-path tests | Expected-failure tests |
+| --- | --- | --- |
+| `program`, `statementList`, separators | blank program; leading/trailing/multiple newlines; semicolon-separated statements | missing separator between statements; unexpected token after `end`; trailing garbage after `EOF` |
+| line/block comments and whitespace | comments between tokens, at end of line, and around blocks | unterminated block comment; comment that removes a required separator |
+| integer/decimal/string/bool/null literals | each literal, escapes, unicode escape, nested parentheses | malformed number; invalid escape; unterminated string; raw newline in string |
+| `datetime`, `guid`, `byte` literals | date-only/date-time/time-zone forms; canonical GUID; hexadecimal byte | invalid calendar/time; malformed timezone; bad GUID groups; `0x` with no digits |
+| `dim`, `const`, `typeHint` | initialized/uninitialized variables; constants; primitive, array, function, and user type hints | duplicate declaration; constant reassignment; unknown type; invalid initializer type; use before declaration |
+| identifier and lexical scope | globals, locals, nested scopes, allowed shadowing, recursion | undeclared read/write; illegal same-scope redeclaration; escaping a block-only name |
+| simple assignment and compound assignment | `=`, `+=`, `-=`, `*=`, `/=`, `%=` on variables and assignable paths | assignment to constant; invalid target; incompatible operand; divide/modulo by zero |
+| assignable member/index paths | `object.field`, `array[i]`, and mixed chains for read/write | null receiver; missing field; non-array index; non-integer/out-of-range index |
+| arithmetic and precedence | all `* / %`, `+ -`, comparisons, equality, parentheses, mixed numeric types | invalid operand types; overflow policy; divide/modulo by zero |
+| unary operators | `!`, unary `+`, unary `-`, nested unary operators | `!` on non-bool; numeric unary operation on non-number |
+| `&&` and `\|\|` | correct values and proven short-circuit side effects | non-bool operands; right-hand fault must not run when short-circuited |
+| calls and arguments | positional, named, mixed valid calls; nested calls; builtin calls | wrong arity; duplicate/unknown named argument; positional after named; calling non-function |
+| `if`/`else` | true/false branches, nested blocks, empty blocks | non-bool condition; missing block separator; malformed/duplicate `else` |
+| `while` | zero-iteration and repeated loops; nested loops | non-bool condition; `break`/`continue` outside a loop |
+| `for`, `to`, `step` | ascending, descending, omitted step, evaluated-once bounds | zero step; wrong bound/step types; illegal counter use; non-bool lowered condition |
+| `break` and `continue` | each nesting level; `continue` runs `for` increment | use outside loop; unreachable malformed target after control statement |
+| `switch`, `case`, `otherwise` | one match, no match, otherwise, nested switch, no fall-through | duplicate/unreachable case policy; invalid case comparison; `break` scope errors |
+| function declarations and parameters | forward call, recursion, typed parameters/return, empty body, void return | duplicate function; invalid/default parameter ordering; missing required return; return outside function |
+| default parameters | omitted defaults, explicit override, side-effect/evaluation timing | default references unavailable name; invalid default type; too few arguments |
+| `return` | value and no-value returns, nested calls, return from `try`/`finally` | value from void function; missing value from required-return function |
+| arrays and array literals | empty, trailing comma, nested arrays, mutation, aliasing | heterogeneous array if disallowed; invalid element type; malformed/trailing tokens |
+| lambdas and lambda bodies | single expression; typed parameters; multiline `end`; closure capture/mutation | invalid arrow form; duplicate lambda parameter; capture of unavailable name; wrong call signature |
+| function types | assignment/pass/return of compatible functions; variance rules | incompatible function type; wrong parameter/return type |
+| `type` declarations and `typeBlock` | fields, constants, methods, initialization order, object construction | duplicate member; invalid field initializer; missing/invalid `self`; constructing abstract/unknown type |
+| member access and methods | field read/write, method call, chained access, method recursion | missing member; access to null; writing constant field; calling field as method |
+| `try`/`catch`/`finally` | typed/untyped catch, rethrow, nested handlers, normal and exceptional finally | invalid catch binding/type; swallowed fault policy; handler/finally control-flow violations |
+| `throw` | throw literals/objects; throw from nested call; rethrow caught value | missing expression; invalid exception value if restricted; uncaught-fault metadata |
+| imports and qualified names | string and dotted imports, exports, cache-once behavior, aliases if specified | missing module; syntax/module mismatch; import cycle; inaccessible export |
+| string interpolation | expression interpolation, escapes, literal braces, nested member/call expressions | unmatched braces; invalid embedded expression; runtime interpolation fault |
+| comments/newline edge cases | every feature with comments and CRLF/LF separators | separator-sensitive malformed variants |
+
+The lexer test suite must additionally assert token kind/text for every keyword,
+operator, punctuation token, numeric form, and comment/newline rule in the
+grammar. The parser suite must assert every named parser rule is reachable by
+at least one fixture.
+
+## Test architecture
+
+Keep tests in `fluid-script.test` grouped by layer. A feature's test folder is
+created before implementation and remains the index of its contract.
 
 ```text
-fluid-script/                 FluidScript net10.0 class library
-  fluidscript.g4              source grammar
-  Parsing/                    generated parser integration and parse errors
-  Ast/                        source-spanned syntax model
-  Compilation/                binding, validation, and P-code generation
-  Runtime/                    values, VM, call frames, builtin boundary
-fluid-script.test/            FluidScript.Test net10.0 MSTest project
-docs/
-  minimal-compiler-plan.md    this plan
-  language-v1.md              frozen language semantics
-  pcode-v1.md                 bytecode and verifier contract
+Parsing/       lexer tokens, parser trees, syntax diagnostics
+Ast/           AST shape, source spans, literal decoding
+Binding/       scopes, symbols, imports, types, overload/default resolution
+Compilation/   P-code goldens, labels, lowering, source maps
+Verification/  malformed bytecode, stack effects, operand/jump validation
+Runtime/       opcode behavior, values, calls, arrays, objects, unwinding
+Integration/   source -> compile -> VM result/output/error
+Compatibility/ serialized P-code versions and module boundaries
 ```
 
-Use ANTLR to produce the parse tree, build an AST from it, then bind and
-validate the AST before generation. Do not generate P-code directly from ANTLR
-contexts: the AST is the stable seam for diagnostics, future type checking,
-and later optimization.
+Use MSTest `DataTestMethod`/`DataRow` for operator and literal matrices, but
+keep a named test for each language feature and each failure category. Keep
+source fixtures readable and include a marker such as `/*^ */` or a line/column
+assertion helper for diagnostic spans.
+
+Every end-to-end fixture should be testable in three modes:
+
+1. parse only, asserting the grammar and token stream;
+2. compile only, asserting symbols, diagnostics, and disassembled P-code; and
+3. run, asserting value/output or a typed fault.
+
+Add property-based or generated tests for arithmetic identities, array index
+bounds, nested control-flow targets, closure lifetimes, and exception
+unwinding after the basic examples are green. Add mutation testing or an
+equivalent fault-injection pass to ensure tests detect removed branches and
+incorrect opcode stack effects.
+
+## Compiler architecture
+
+Use the existing ANTLR MSBuild generation. The implementation stays split into
+clear namespaces in the `FluidScript` library:
 
 ```text
-source -> parse tree -> AST -> bind/validate -> P-code module -> VM -> result
+Parsing       generated lexer/parser adapters and diagnostic listeners
+Ast           immutable source-spanned nodes
+Binding       scopes, symbols, module graph, nominal/structural types
+Lowering      desugaring of switch, compound assignment, defaults, interpolation
+Compilation   P-code instruction builder, labels, closures, and type tables
+Verification  static P-code verifier
+Runtime       values, frames, arrays, objects, handlers, module loader, VM
 ```
 
-## P-code v1
-
-Start with a readable in-memory representation. Add a compact on-disk format
-only after semantic behavior and disassembly tests are stable.
+The pipeline is:
 
 ```text
-Module
-  constants: Value[]
-  functions: Function[]
-  entryFunction: function id
-
-Function
-  name, arity, localCount, instructions, sourceMap
+source
+  -> lexer/parser with collected errors
+  -> AST with source spans
+  -> module loading/import graph
+  -> symbol binding and type checking
+  -> explicit lowering
+  -> P-code generation and source-map emission
+  -> bytecode verification
+  -> VM execution
 ```
 
-Core instructions:
+Do not compile directly from ANTLR contexts. Each phase must be independently
+testable and must refuse to continue after errors. Diagnostics use stable
+codes, for example `FS1001` syntax, `FS2001` binding/type, `FS3001` lowering,
+`FS4001` bytecode, and `FS5001` runtime.
+
+## P-code contract
+
+Define `docs/pcode.md` before emitting code. The module format is versioned and
+contains constants, functions, closure/type metadata, module imports/exports,
+exception-handler tables, and source maps. Initially use an in-memory form and
+then add a deterministic binary serializer with round-trip tests.
+
+Instruction families must cover all language features:
 
 ```text
-CONST k                 LOAD_LOCAL slot        STORE_LOCAL slot
-LOAD_GLOBAL slot        STORE_GLOBAL slot      POP
-ADD SUB MUL DIV MOD     NEG NOT
-EQ NE LT LTE GT GTE
-JUMP ip                 JUMP_IF_FALSE ip
-CALL functionId argc    CALL_NATIVE builtinId argc
-RETURN                  RETURN_VOID            HALT
+Constants/stack: CONST, NULL, DUP, POP
+Variables:       LOAD/STORE_LOCAL, LOAD/STORE_GLOBAL, LOAD/STORE_CAPTURE
+Arithmetic:      ADD, SUB, MUL, DIV, MOD, NEG, NOT
+Comparison:      EQ, NE, LT, LTE, GT, GTE
+Control:         JUMP, JUMP_IF_FALSE, SWITCH, FOR_CHECK, FOR_INCREMENT
+Calls:           CALL, CALL_NATIVE, MAKE_CLOSURE, RETURN, RETURN_VOID
+Arrays:          MAKE_ARRAY, INDEX_GET, INDEX_SET
+Objects:         NEW_OBJECT, FIELD_GET, FIELD_SET, METHOD_CALL
+Exceptions:      THROW, ENTER_HANDLER, LEAVE_HANDLER, END_FINALLY, RERAISE
+Modules:         IMPORT_MODULE, LOAD_EXPORT, STORE_EXPORT
+Program:         HALT
 ```
 
-Compile `&&` and `||` to jumps, not eager binary opcodes, so they are
-short-circuiting. Compile each function into its own code unit and predeclare
-all function IDs during binding, enabling recursion and forward calls. The
-entry function contains executable top-level statements, not function bodies.
+The exact instruction set may lower constructs to simpler primitives, but
+every emitted instruction has a documented stack effect and a compiler golden
+test. The verifier checks opcode operands, constant/function/type indexes,
+jump boundaries, stack depth at control-flow joins, handler nesting, closure
+capture indexes, and call signatures.
 
-Either lower `for` to normal comparisons and jumps or add narrowly scoped
-`FOR_CHECK` and `FOR_INCREMENT` instructions. The latter makes positive and
-negative runtime step behavior explicit and easier to test.
+`&&`/`||` must lower to short-circuit jumps. Compound/member/index assignment
+must preserve evaluation order and evaluate a receiver/index exactly once.
+Defaults, interpolation, and switch may lower to ordinary instructions if
+their source maps and failure behavior remain observable and tested.
 
-The compiler emits a P-code verifier result before execution. It verifies
-operand ranges, valid jump destinations, reachable instruction stack depth,
-and function call arity.
+## VM and host contract
 
-## VM contract
+Implement a tagged `Value` type for all language values: null, bool, int,
+decimal, string, datetime, guid, byte, arrays, objects, functions, closures,
+and module references. Use explicit reference identity for mutable arrays,
+objects, and captured cells.
 
-The VM has a tagged `Value` representation, an operand stack, global storage,
-and call frames. A frame holds its function ID, instruction pointer, local
-slots, operand-stack base, and return target.
+Each call frame contains function ID, instruction pointer, locals, captures,
+operand-stack base, and return target. The VM has bounded operand stack, call
+depth, module loading, and instruction budget. Faults unwind frames and handler
+tables while preserving the original source location.
 
-The host exposes builtins through a small registry interface; P-code never
-reflects over arbitrary host objects or gains filesystem/network access by
-default. The VM enforces instruction, operand-stack, and call-depth limits.
-Every runtime fault resolves the instruction through the function source map
-for a useful FluidScript diagnostic.
+The host boundary is capability-based. Builtins and module loading are
+registered interfaces; no arbitrary reflection, filesystem, network, or
+process access is available unless a host explicitly grants it. Test the same
+program with a deterministic fake host and with missing/denied capabilities.
 
-## Delivery sequence and evidence
+Finally semantics must be implemented by the unwinder, not duplicated as
+ordinary jumps. Test `finally` while returning, breaking, continuing,
+throwing, catching, and rethrowing.
 
-1. Scaffold the library, MSTest project, solution, and project reference.
-2. Add parser generation, parser-error tests, and fixtures exercising
-   significant newlines and nested `end` blocks.
-3. Add source spans and AST tests.
-4. Build the binder: scopes, symbols, constants, function predeclaration,
-   unresolved-name diagnostics, and unsupported-feature diagnostics.
-5. Add the P-code builder, labels/fixups, disassembler, and verifier with
-   golden instruction tests.
-6. Implement the VM and direct builtin registry; unit-test every opcode and
-   fault condition.
-7. Implement expressions and declarations, then branches/loops, then
-   functions/returns and `for`/loop control.
-8. Add end-to-end source-to-result tests and a small CLI with `parse`,
-   `compile`, `disasm`, and `run` commands.
-9. Choose one coherent expansion at a time: arrays, switch, closures, types,
-   modules, then exceptions last. `finally` requires a proper unwinder and
-   must not be approximated with ordinary jumps.
+## Delivery milestones
 
-Completion for v1 requires parser, compiler, verifier, VM, and end-to-end
-coverage for every supported construct; diagnostic tests for every rejected
-feature; a complete `dotnet test` run; and documented distinction between
-in-memory P-code proof and any future serialized-module compatibility claim.
+Each milestone starts with its test fixtures and ends only when all paired
+happy/failure tests and the full suite pass.
+
+1. **Contracts and harness** — finish `language.md` and `pcode.md`; add test
+   helpers for source spans, diagnostics, compilation, disassembly, and VM
+   output.
+2. **Front end** — lexer/parser fixtures for every token/rule, AST conversion,
+   malformed-input diagnostics, and complete literal decoding.
+3. **Core semantics** — scopes, declarations, constants, primitive types,
+   identifiers, all operators, assignment, and static type checking.
+4. **P-code/VM core** — constants, locals/globals, arithmetic/comparison,
+   jumps, stack verifier, calls, returns, source maps, and deterministic
+   runtime faults.
+5. **Control flow** — if/else, while, for/step, break/continue, and switch;
+   include nested-target and unreachable-code cases.
+6. **Collections and paths** — arrays, index/member paths, compound assignment,
+   aliasing, bounds/type faults, and evaluation-order tests.
+7. **Functions and closures** — defaults, named arguments, function types,
+   lambdas, captured cells, recursion, and closure lifetime.
+8. **User types** — fields, constants, constructors, methods, `self`, nominal
+   typing, initialization order, and member/method faults.
+9. **Exceptions** — throw, typed/untyped catch, nested handlers, rethrow, and
+   fully unwound finally behavior.
+10. **Modules** — resolver/loader interface, exports, qualified names, cache,
+    cycle detection, capability denial, and serialized module boundaries.
+11. **Interpolation and polish** — semantic string interpolation, complete
+    source maps, diagnostics, disassembler, CLI, and documentation examples.
+12. **Hardening** — deterministic binary P-code round trips, fuzz/property
+    tests, mutation testing, resource limits, performance baselines, and
+    compatibility/version tests.
+
+## Definition of complete implementation
+
+The language is complete only when all of the following are true:
+
+* every lexer token and parser rule in `FluidScript.g4` has valid and invalid
+  test fixtures;
+* every semantic feature in the acceptance matrix has paired happy-path and
+  expected-failure tests;
+* every P-code opcode has stack-effect, verifier, normal-runtime, and fault
+  tests where applicable;
+* source-to-VM tests cover nesting, recursion, aliases, evaluation order,
+  exception unwinding, module caching, and resource limits;
+* diagnostics are stable, source-spanned, and documented;
+* serialized P-code is versioned and round-trips deterministically;
+* `dotnet test FluidScript.sln --configuration Release` passes from a clean
+  checkout, with no generated files required in source control; and
+* the documentation examples are executable test fixtures, not prose-only
+  claims.
+
+Passing unit tests alone is insufficient: the completion record must list the
+feature matrix, test names/results, full-suite command, and any explicitly
+deferred compatibility or host-environment evidence.
