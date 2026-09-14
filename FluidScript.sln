@@ -1,0 +1,56 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "fluid-script", "fluid-script", "{5D7FA9C6-AC67-7371-5BDE-DF30D8BC16DA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FluidScript", "fluid-script\FluidScript.csproj", "{95C92654-9B5C-4875-934C-6114CBD41B1A}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "fluid-script.test", "fluid-script.test", "{75ABC13C-23DD-15F3-956D-E7582956C68D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FluidScript.Test", "fluid-script.test\FluidScript.Test.csproj", "{35BFE5B9-40B6-4591-812E-59F955C84C93}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|Any CPU = Release|Any CPU
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{95C92654-9B5C-4875-934C-6114CBD41B1A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{95C92654-9B5C-4875-934C-6114CBD41B1A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{95C92654-9B5C-4875-934C-6114CBD41B1A}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{95C92654-9B5C-4875-934C-6114CBD41B1A}.Debug|x64.Build.0 = Debug|Any CPU
+		{95C92654-9B5C-4875-934C-6114CBD41B1A}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{95C92654-9B5C-4875-934C-6114CBD41B1A}.Debug|x86.Build.0 = Debug|Any CPU
+		{95C92654-9B5C-4875-934C-6114CBD41B1A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{95C92654-9B5C-4875-934C-6114CBD41B1A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{95C92654-9B5C-4875-934C-6114CBD41B1A}.Release|x64.ActiveCfg = Release|Any CPU
+		{95C92654-9B5C-4875-934C-6114CBD41B1A}.Release|x64.Build.0 = Release|Any CPU
+		{95C92654-9B5C-4875-934C-6114CBD41B1A}.Release|x86.ActiveCfg = Release|Any CPU
+		{95C92654-9B5C-4875-934C-6114CBD41B1A}.Release|x86.Build.0 = Release|Any CPU
+		{35BFE5B9-40B6-4591-812E-59F955C84C93}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{35BFE5B9-40B6-4591-812E-59F955C84C93}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{35BFE5B9-40B6-4591-812E-59F955C84C93}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{35BFE5B9-40B6-4591-812E-59F955C84C93}.Debug|x64.Build.0 = Debug|Any CPU
+		{35BFE5B9-40B6-4591-812E-59F955C84C93}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{35BFE5B9-40B6-4591-812E-59F955C84C93}.Debug|x86.Build.0 = Debug|Any CPU
+		{35BFE5B9-40B6-4591-812E-59F955C84C93}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{35BFE5B9-40B6-4591-812E-59F955C84C93}.Release|Any CPU.Build.0 = Release|Any CPU
+		{35BFE5B9-40B6-4591-812E-59F955C84C93}.Release|x64.ActiveCfg = Release|Any CPU
+		{35BFE5B9-40B6-4591-812E-59F955C84C93}.Release|x64.Build.0 = Release|Any CPU
+		{35BFE5B9-40B6-4591-812E-59F955C84C93}.Release|x86.ActiveCfg = Release|Any CPU
+		{35BFE5B9-40B6-4591-812E-59F955C84C93}.Release|x86.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{95C92654-9B5C-4875-934C-6114CBD41B1A} = {5D7FA9C6-AC67-7371-5BDE-DF30D8BC16DA}
+		{35BFE5B9-40B6-4591-812E-59F955C84C93} = {75ABC13C-23DD-15F3-956D-E7582956C68D}
+	EndGlobalSection
+EndGlobal

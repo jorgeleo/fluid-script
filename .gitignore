@@ -1,0 +1,39 @@
+# .NET build output
+[Bb]in/
+[Oo]bj/
+[Aa]rtifacts/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+# JetBrains Rider / ReSharper
+.idea/
+*.sln.iml
+*.DotSettings.user
+
+# NuGet and generated package artifacts
+packages/
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+
+# Test and coverage output
+TestResults/
+[Cc]overage/
+coverage*.xml
+*.coverage
+*.coveragexml
+
+# Local tooling and generated files
+.omnisharp/
+Generated/
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
