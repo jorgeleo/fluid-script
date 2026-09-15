@@ -51,6 +51,20 @@ kbd { margin-left: 4px; border: 1px solid #64748b; border-radius: 3px; padding: 
 h2 { margin: 0; font-size: 1rem; }
 .result { color: #7dd3fc; font: 0.85rem ui-monospace, SFMono-Regular, Menlo, monospace; }
 .output { flex: 1; overflow: auto; margin: 0; padding: 16px; color: #cbd5e1; font: 0.88rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+.debug-panel { border-top: 1px solid #334155; background: #0b1220; }
+.debug-panel .panel-heading { padding: 10px 16px; }
+.debug-panel button { padding: 6px 10px; font-size: 0.82rem; }
+.debug-hint { margin: 0; padding: 10px 16px; color: #94a3b8; font-size: 0.8rem; }
+.frame-label { display: block; margin: 0 16px 5px; color: #94a3b8; font-size: 0.76rem; font-weight: 700; text-transform: uppercase; }
+#frame-select { width: calc(100% - 32px); margin: 0 16px 10px; border: 1px solid #475569; border-radius: 5px; padding: 6px 8px; background: #111827; color: #e2e8f0; }
+.variables { display: grid; gap: 8px; max-height: 230px; overflow: auto; padding: 0 16px 14px; }
+.variable-row { display: grid; grid-template-columns: minmax(90px, 0.7fr) minmax(0, 1.3fr); align-items: center; gap: 8px; }
+.variable-row label { overflow: hidden; color: #cbd5e1; font: 0.78rem ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.variable-row input { width: 100%; border: 1px solid #475569; border-radius: 5px; padding: 6px 8px; background: #111827; color: #e2e8f0; font: 0.78rem ui-monospace, SFMono-Regular, Menlo, monospace; }
+.variable-row input:disabled { color: #64748b; }
+.fluidscript-breakpoint-glyph { box-sizing: border-box; width: 10px !important; height: 10px !important; margin: 5px 0 0 4px; border-radius: 50%; background: #fb7185; }
+.fluidscript-paused-glyph { box-sizing: border-box; width: 10px !important; height: 10px !important; margin: 5px 0 0 4px; border-radius: 50%; background: #facc15; }
+.fluidscript-paused-line { background: rgb(250 204 21 / 0.12); }
 .app-footer { justify-content: space-between; gap: 12px; color: #64748b; font-size: 0.78rem; }
 code { color: #94a3b8; }
 

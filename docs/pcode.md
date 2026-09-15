@@ -87,6 +87,30 @@ unknown flags rather than guessing.
 Version changes require a round-trip fixture and a compatibility decision in
 the implementation plan.
 
+## Detached debug execution
+
+`VirtualMachine.RunDebug(module, breakLines, context)` requires debug P-code
+and stops immediately before an instruction whose one-based source line is in
+`breakLines`. Its stopped `DebugExecutionResult` contains a
+`PCodeDebugState`, rather than a runner-owned continuation. The state carries
+the stopped line, the exact next instruction pointer for every frame, local and
+captured cells, operand stack, globals, exception-handler state, pending fault,
+and executed-instruction count.
+
+The checkpoint's `PCodeHash` is SHA-256 of `Serialize(module,
+PCodeDebugInfo.SourceSpans)`, not merely the source hash. It therefore binds a
+resume request to the exact listing and debug metadata. `RunFromDebugState`
+checks that hash and the frame/line invariants before it starts a new VM
+execution from the supplied state. It carries no breakpoint forward, preserves
+the total instruction count, and uses the caller-provided execution context for
+host registrations and output.
+
+The checkpoint is complete VM state with no hidden reference to the original
+runner. `PCodeDebugStateJson` transports cells, reference aliases, closures,
+arrays, dictionaries, objects, and pending faults across requests. Registered
+host objects are rejected during transport because their identity and lifetime
+belong to the host; a host-specific transport contract is required for them.
+
 `MakeDictionary` uses alternating key/value operands in source order. The VM
 requires each key to be a string and retains the final value for duplicate
 keys. Dictionary constants serialize entries in ordinal key order. The

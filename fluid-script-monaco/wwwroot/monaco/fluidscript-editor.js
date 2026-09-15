@@ -131,6 +131,7 @@ export function createFluidScriptEditor(monaco, container, options = {}) {
     minimap: { enabled: false },
     folding: true,
     foldingStrategy: "auto",
+    glyphMargin: true,
     showFoldingControls: "always",
     scrollBeyondLastLine: false,
     fontSize: 14,
@@ -138,6 +139,55 @@ export function createFluidScriptEditor(monaco, container, options = {}) {
     ...editorOptions
   });
   return editor;
+}
+
+/** Adds source-line breakpoint and paused-line decorations without page-specific behavior. */
+export function createFluidScriptBreakpointController(monaco, editor) {
+  let breakpointDecorations = [];
+  let pausedDecorations = [];
+
+  const getBreakLines = () => breakpointDecorations
+    .map((id) => editor.getModel()?.getDecorationRange(id)?.startLineNumber)
+    .filter((line) => Number.isInteger(line))
+    .sort((left, right) => left - right);
+
+  const setBreakLines = (lines) => {
+    const model = editor.getModel();
+    breakpointDecorations = editor.deltaDecorations(
+      breakpointDecorations,
+      [...new Set(lines)].filter((line) => line > 0).map((line) => ({
+        range: new monaco.Range(line, 1, line, 1),
+        options: { glyphMarginClassName: "fluidscript-breakpoint-glyph" }
+      }))
+    );
+    return model ? getBreakLines() : [];
+  };
+
+  const toggleBreakpoint = (line) => {
+    const lines = getBreakLines();
+    setBreakLines(lines.includes(line) ? lines.filter((item) => item !== line) : [...lines, line]);
+  };
+
+  const setPausedLine = (line) => {
+    pausedDecorations = editor.deltaDecorations(pausedDecorations, line > 0 ? [{
+      range: new monaco.Range(line, 1, line, 1),
+      options: { isWholeLine: true, className: "fluidscript-paused-line", glyphMarginClassName: "fluidscript-paused-glyph" }
+    }] : []);
+  };
+
+  const mouseSubscription = editor.onMouseDown((event) => {
+    if (event.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && event.target.position) {
+      toggleBreakpoint(event.target.position.lineNumber);
+    }
+  });
+
+  return {
+    getBreakLines,
+    setBreakLines,
+    clearBreakpoints: () => setBreakLines([]),
+    setPausedLine,
+    dispose: () => mouseSubscription.dispose()
+  };
 }
 
 export function getFluidScriptText(editor) {

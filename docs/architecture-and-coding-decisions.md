@@ -186,6 +186,32 @@ disassembler, debugger, and editor consume that abstraction rather than
 reimplementing offset arithmetic. Release P-code intentionally omits this
 debug metadata.
 
+### A10.1 — detached debug checkpoints (Accepted)
+
+`VirtualMachine.RunDebug` accepts a set of one-based source lines and stops
+immediately before an instruction mapped to one of those lines. A stop returns
+`PCodeDebugState`: the next line and instruction pointer, all call frames and
+local/captured cells, operand stack, globals, handler/pending-fault state, and
+the number of instructions already executed. The state is the entire VM
+continuation; the VM retains no resume session or hidden execution state.
+
+`PCodeDebugState.PCodeHash` is SHA-256 over the complete deterministic debug
+P-code payload (including source hash, metadata, instructions, and spans).
+`RunFromDebugState` validates it in constant time against the supplied module,
+then verifies frame positions and resumes from the exact next instruction. The
+instruction count is retained so an instruction limit applies to the logical
+execution, not to each request. A resumed execution has no implicit
+breakpoint, and therefore continues as an uninterrupted program would.
+
+Only debug P-code with the source hash can create or consume a checkpoint;
+release P-code is rejected. The caller supplies a fresh execution context for
+the resumed request, including compatible host capabilities and the output
+callback. `PCodeDebugStateJson` transports checkpoint value graphs across
+requests, preserving cells, aliases, closures, arrays, dictionaries, objects,
+and pending faults. Registered host objects remain non-transferable and cause
+checkpoint transport to fail explicitly; a host-specific transport contract is
+required before they can participate in detached debugging.
+
 ## Host and script boundary
 
 ### A11 — capability-based host functions and CLR objects (Accepted)

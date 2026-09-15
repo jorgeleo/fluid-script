@@ -140,6 +140,24 @@ public static class PCodeSerializer
             CryptographicOperations.FixedTimeEquals(module.SourceHash.Span, ComputeSourceHash(sourceText));
     }
 
+    /// <summary>
+    /// Computes the identity used by detached debug checkpoints. The hash covers
+    /// the complete deterministic debug P-code payload, including its source hash,
+    /// metadata, instructions, and source spans.
+    /// </summary>
+    public static byte[] ComputeDebugPCodeHash(PCodeModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        if (module.SourceHash.Length != SourceHashLength)
+            throw new InvalidOperationException("Debug P-code must include a source hash.");
+        return SHA256.HashData(Serialize(module, PCodeDebugInfo.SourceSpans));
+    }
+
+    /// <summary>Checks whether a detached debug checkpoint belongs to this exact debug P-code payload.</summary>
+    public static bool DebugPCodeHashMatches(PCodeModule module, ReadOnlySpan<byte> pCodeHash) =>
+        pCodeHash.Length == SourceHashLength &&
+        CryptographicOperations.FixedTimeEquals(ComputeDebugPCodeHash(module), pCodeHash);
+
     private static PCodeModule DeserializeCore(ReadOnlySpan<byte> bytes)
     {
         using var stream = new MemoryStream(bytes.ToArray(), writable: false);

@@ -17,6 +17,7 @@
       <div class="toolbar">
         <span id="status" class="status" role="status">Loading editor…</span>
         <button id="run-button" type="button" disabled>Run <kbd>Ctrl</kbd><kbd>Enter</kbd></button>
+        <button id="debug-button" type="button" class="secondary" disabled>Debug</button>
         <button id="reset-button" type="button" class="secondary" disabled>Reset</button>
       </div>
     </header>
@@ -31,6 +32,16 @@
           <span id="result" class="result"></span>
         </div>
         <pre id="output" class="output" aria-live="polite">Run the program to see output.</pre>
+        <section class="debug-panel" aria-labelledby="debug-heading">
+          <div class="panel-heading">
+            <h2 id="debug-heading">Checkpoint</h2>
+            <button id="continue-button" type="button" disabled>Continue</button>
+          </div>
+          <p id="debug-hint" class="debug-hint">Click the editor gutter to add a checkpoint, then choose Debug.</p>
+          <label class="frame-label" for="frame-select">Stack frame</label>
+          <select id="frame-select" disabled></select>
+          <div id="variables" class="variables" aria-live="polite"></div>
+        </section>
       </aside>
     </section>
 

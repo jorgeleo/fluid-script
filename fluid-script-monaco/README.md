@@ -3,7 +3,9 @@
 This is a small ASP.NET Core host that serves a Monaco-based FluidScript
 playground. It demonstrates editing, syntax coloring, block folding, compiler
 diagnostics, and running the current source through the real FluidScript .NET
-compiler and VM.
+compiler and VM. Click Monaco's glyph gutter to add checkpoints, select
+**Debug**, inspect a paused stack frame, edit JSON-native variable values, and
+choose **Continue** to resume from the detached checkpoint.
 
 The browser code is intentionally split:
 
@@ -15,6 +17,9 @@ The browser code is intentionally split:
 * `wwwroot/demo/demo.js`, `wwwroot/index.html`, and `wwwroot/styles/site.css`
   are demo-specific UI and API wiring.
 * `Program.cs` is the demo backend endpoint that compiles and executes source.
+  Debug start and continue requests carry a portable `PCodeDebugStateJson`
+  envelope; the server retains no debug session and recompiles/validates the
+  source and P-code hash before continuing.
 
 Run it from the repository root:
 
@@ -32,3 +37,8 @@ The sample is deliberately a development playground, not a production host:
 it has no authentication, persistence, multi-user isolation, or arbitrary
 host capabilities. Add those at the application boundary before exposing an
 execution endpoint outside a trusted environment.
+
+Variable edits use JSON (`42`, `true`, `"text"`, `[1, 2]`, or
+`{"name":"Ada"}`). Registered host objects cannot be transferred in a
+detached checkpoint, so debug start reports that limitation instead of creating
+an invalid continuation.

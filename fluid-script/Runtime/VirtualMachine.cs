@@ -29,7 +29,7 @@ public sealed class VirtualMachine
 
         var globals = new FluidValue[module.GlobalCount];
         LoadGlobals(module, globals, context);
-        return Execute(module, module.EntryFunction, Array.Empty<FluidValue>(), globals, context, instructionLimit);
+        return Execute(module, module.EntryFunction, Array.Empty<FluidValue>(), globals, context, instructionLimit).Value ?? FluidValue.Null;
     }
 
     /// <summary>Invokes a named script function from C#, returning its FluidValue result.</summary>
@@ -58,7 +58,54 @@ public sealed class VirtualMachine
         context = RegisterNativeLibraries(context);
         var globals = Enumerable.Repeat(FluidValue.Null, module.GlobalCount).ToArray();
         LoadGlobals(module, globals, context);
-        return Execute(module, functionId, arguments ?? Array.Empty<FluidValue>(), globals, context, instructionLimit);
+        return Execute(module, functionId, arguments ?? Array.Empty<FluidValue>(), globals, context, instructionLimit).Value ?? FluidValue.Null;
+    }
+
+    /// <summary>
+    /// Executes debug P-code until it completes or is about to execute an instruction
+    /// whose source line is in <paramref name="breakLines"/>.
+    /// </summary>
+    public DebugExecutionResult RunDebug(
+        PCodeModule module,
+        IEnumerable<int> breakLines,
+        FluidScriptExecutionContext? context = null,
+        int instructionLimit = 1_000_000)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentNullException.ThrowIfNull(breakLines);
+        EnsureDebugPCode(module);
+        var lines = breakLines.ToHashSet();
+        if (lines.Any(line => line <= 0))
+            throw new ArgumentOutOfRangeException(nameof(breakLines), "Breakpoint lines must be positive.");
+        context ??= new FluidScriptExecutionContext();
+        context = RegisterNativeLibraries(context);
+        if (module.EntryFunction < 0 || module.EntryFunction >= module.Functions.Count)
+            throw new ArgumentException("The P-code entry function is invalid.", nameof(module));
+
+        var globals = new FluidValue[module.GlobalCount];
+        LoadGlobals(module, globals, context);
+        return Execute(module, module.EntryFunction, Array.Empty<FluidValue>(), globals, context, instructionLimit, lines);
+    }
+
+    /// <summary>
+    /// Starts a new execution from a detached debug state. No VM state from the
+    /// original stop is retained; the state itself supplies all interpreter data.
+    /// </summary>
+    public DebugExecutionResult RunFromDebugState(
+        PCodeModule module,
+        PCodeDebugState state,
+        FluidScriptExecutionContext? context = null,
+        int instructionLimit = 1_000_000)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentNullException.ThrowIfNull(state);
+        EnsureDebugPCode(module);
+        ValidateDebugState(module, state);
+        context ??= new FluidScriptExecutionContext();
+        context = RegisterNativeLibraries(context);
+        var (frames, stack) = RestoreDebugState(module, state);
+        return Execute(module, 0, Array.Empty<FluidValue>(), state.Globals.ToArray(), context, instructionLimit,
+            breakLines: null, initialFrames: frames, initialStack: stack, initialSteps: state.InstructionsExecuted);
     }
 
     private static FluidScriptExecutionContext RegisterNativeLibraries(FluidScriptExecutionContext context)
@@ -71,25 +118,39 @@ public sealed class VirtualMachine
             : context;
     }
 
-    private static FluidValue Execute(
+    private static DebugExecutionResult Execute(
         PCodeModule module,
         int functionId,
         IReadOnlyList<FluidValue> arguments,
         FluidValue[] globals,
         FluidScriptExecutionContext context,
-        int instructionLimit)
+        int instructionLimit,
+        IReadOnlySet<int>? breakLines = null,
+        List<Frame>? initialFrames = null,
+        List<FluidValue>? initialStack = null,
+        int initialSteps = 0)
     {
-        var entry = module.Functions[functionId];
-        if (arguments.Count != entry.Arity)
-            throw new ArgumentException($"Function '{entry.Name}' expects {entry.Arity} arguments, but received {arguments.Count}.", nameof(arguments));
-        var stack = new List<FluidValue>();
-        var frames = new List<Frame>
+        List<FluidValue> stack;
+        List<Frame> frames;
+        if (initialFrames is null || initialStack is null)
         {
-            new(entry, entry.LocalCount, 0, 0, null)
-        };
-        for (var index = 0; index < arguments.Count; index++)
-            frames[0].Locals[index].Value = arguments[index];
-        var steps = 0;
+            var entry = module.Functions[functionId];
+            if (arguments.Count != entry.Arity)
+                throw new ArgumentException($"Function '{entry.Name}' expects {entry.Arity} arguments, but received {arguments.Count}.", nameof(arguments));
+            stack = new List<FluidValue>();
+            frames = new List<Frame>
+            {
+                new(entry, entry.LocalCount, 0, 0, null)
+            };
+            for (var index = 0; index < arguments.Count; index++)
+                frames[0].Locals[index].Value = arguments[index];
+        }
+        else
+        {
+            stack = initialStack;
+            frames = initialFrames;
+        }
+        var steps = initialSteps;
 
         while (frames.Count > 0)
         {
@@ -99,6 +160,10 @@ public sealed class VirtualMachine
             var frame = frames[^1];
             if (frame.Ip < 0 || frame.Ip >= frame.Function.Instructions.Count)
                 Fault("FS4002", "Instruction pointer is outside the function.", frame.CurrentSpan, frame.Function.Name);
+
+            var nextInstruction = frame.Function.Instructions[frame.Ip];
+            if (breakLines?.Contains(nextInstruction.Span.Line) == true)
+                return new DebugExecutionResult(null, CaptureDebugState(module, frames, stack, globals, nextInstruction.Span.Line, steps));
 
             var instruction = frame.Function.Instructions[frame.Ip++];
             frame.CurrentSpan = instruction.Span;
@@ -247,7 +312,7 @@ public sealed class VirtualMachine
                     if (frames.Count == 0)
                     {
                         SaveGlobals(module, globals, context);
-                        return returnValue;
+                        return new DebugExecutionResult(returnValue, null);
                     }
                     break;
                 case OpCode.ReturnVoid:
@@ -255,7 +320,7 @@ public sealed class VirtualMachine
                     if (frames.Count == 0)
                     {
                         SaveGlobals(module, globals, context);
-                        return FluidValue.Null;
+                        return new DebugExecutionResult(FluidValue.Null, null);
                     }
                     break;
                 case OpCode.MakeArray:
@@ -285,7 +350,7 @@ public sealed class VirtualMachine
                 case OpCode.Halt:
                     var haltValue = stack.Count == 0 ? FluidValue.Null : Pop(stack, frame);
                     SaveGlobals(module, globals, context);
-                    return haltValue;
+                    return new DebugExecutionResult(haltValue, null);
                     case OpCode.EnterHandler:
                         if (instruction.OperandA < 0 || instruction.OperandA >= frame.Function.Instructions.Count)
                             Fault("FS4007", "Exception handler target is invalid.", instruction.Span, frame.Function.Name);
@@ -318,7 +383,117 @@ public sealed class VirtualMachine
             }
         }
 
-        return FluidValue.Null;
+        return new DebugExecutionResult(FluidValue.Null, null);
+    }
+
+    private static void EnsureDebugPCode(PCodeModule module)
+    {
+        if (module.SourceHash.Length != 32)
+            throw new InvalidOperationException("Debug execution requires P-code with source spans and a source hash.");
+    }
+
+    private static PCodeDebugState CaptureDebugState(
+        PCodeModule module,
+        IReadOnlyList<Frame> frames,
+        IReadOnlyList<FluidValue> stack,
+        IReadOnlyList<FluidValue> globals,
+        int line,
+        int instructionsExecuted)
+    {
+        var debugFrames = frames.Select(frame =>
+        {
+            var functionId = GetFunctionId(module, frame.Function);
+            return new PCodeDebugFrame(
+                functionId,
+                frame.Ip,
+                frame.StackBase,
+                frame.Locals,
+                frame.Captures,
+                frame.Handlers.Select(handler => new PCodeDebugExceptionHandler(handler.Target, handler.StackDepth, handler.FilterKind)).ToArray(),
+                frame.PendingFault,
+                frame.CurrentSpan,
+                GetVariables(frame));
+        }).ToArray();
+        return new PCodeDebugState(PCodeSerializer.ComputeDebugPCodeHash(module), line, debugFrames, stack, globals, instructionsExecuted);
+    }
+
+    private static IReadOnlyDictionary<string, FluidValue> GetVariables(Frame frame)
+    {
+        var variables = new Dictionary<string, FluidValue>(StringComparer.Ordinal);
+        for (var index = 0; index < frame.Locals.Length; index++)
+        {
+            var name = frame.Function.LocalNames.TryGetValue(index, out var localName)
+                ? localName
+                : $"$local{index}";
+            variables[name] = frame.Locals[index].Value;
+        }
+        for (var index = 0; index < frame.Captures.Length; index++)
+        {
+            var name = index < frame.Function.CaptureNames.Count
+                ? frame.Function.CaptureNames[index]
+                : $"$capture{index}";
+            if (!variables.TryAdd(name, frame.Captures[index].Value))
+                variables[$"$capture:{name}"] = frame.Captures[index].Value;
+        }
+        return variables;
+    }
+
+    private static int GetFunctionId(PCodeModule module, PCodeFunction function)
+    {
+        for (var index = 0; index < module.Functions.Count; index++)
+            if (ReferenceEquals(module.Functions[index], function))
+                return index;
+        throw new InvalidOperationException("The debug frame does not belong to the supplied P-code module.");
+    }
+
+    private static void ValidateDebugState(PCodeModule module, PCodeDebugState state)
+    {
+        if (!PCodeSerializer.DebugPCodeHashMatches(module, state.PCodeHash.Span))
+            throw new ArgumentException("The debug state does not belong to this P-code module.", nameof(state));
+        if (state.Line <= 0 || state.InstructionsExecuted < 0 || state.Globals.Count != module.GlobalCount || state.Frames.Count == 0)
+            throw new ArgumentException("The debug state is malformed.", nameof(state));
+
+        for (var index = 0; index < state.Frames.Count; index++)
+        {
+            var frame = state.Frames[index];
+            if (frame.FunctionId < 0 || frame.FunctionId >= module.Functions.Count)
+                throw new ArgumentException("The debug state references an invalid function.", nameof(state));
+            var function = module.Functions[frame.FunctionId];
+            if (frame.InstructionPointer < 0 || frame.InstructionPointer >= function.Instructions.Count ||
+                frame.Locals.Count != function.LocalCount || frame.Captures.Count != function.CaptureNames.Count ||
+                frame.StackBase < 0 || frame.StackBase > state.OperandStack.Count)
+                throw new ArgumentException("The debug state contains an invalid frame.", nameof(state));
+            if (frame.Handlers.Any(handler => handler.Target < 0 || handler.Target >= function.Instructions.Count ||
+                handler.StackDepth < frame.StackBase || handler.StackDepth > state.OperandStack.Count))
+                throw new ArgumentException("The debug state contains an invalid exception handler.", nameof(state));
+        }
+
+        var current = state.Frames[^1];
+        if (module.Functions[current.FunctionId].Instructions[current.InstructionPointer].Span.Line != state.Line)
+            throw new ArgumentException("The debug state line does not match its next instruction.", nameof(state));
+    }
+
+    private static (List<Frame> Frames, List<FluidValue> Stack) RestoreDebugState(PCodeModule module, PCodeDebugState state)
+    {
+        var frames = state.Frames.Select(debugFrame =>
+        {
+            var function = module.Functions[debugFrame.FunctionId];
+            var frame = new Frame(
+                function,
+                debugFrame.Locals.Count,
+                debugFrame.InstructionPointer,
+                debugFrame.StackBase,
+                debugFrame.Captures,
+                debugFrame.Locals.ToArray())
+            {
+                CurrentSpan = debugFrame.CurrentSpan,
+                PendingFault = debugFrame.PendingFault
+            };
+            foreach (var handler in debugFrame.Handlers)
+                frame.Handlers.Add(new Handler(handler.Target, handler.StackDepth, handler.FilterKind));
+            return frame;
+        }).ToList();
+        return (frames, state.OperandStack.ToList());
     }
 
     private static void LoadGlobals(PCodeModule module, FluidValue[] globals, FluidScriptExecutionContext context)
@@ -977,10 +1152,16 @@ public sealed class VirtualMachine
     private static void Fault(string code, string message, SourceSpan span, string functionName) =>
         throw new RuntimeFaultException(code, message, span, functionName);
 
-    private sealed class Frame(PCodeFunction function, int localCount, int ip, int stackBase, IReadOnlyList<FluidCell>? captures)
+    private sealed class Frame(
+        PCodeFunction function,
+        int localCount,
+        int ip,
+        int stackBase,
+        IReadOnlyList<FluidCell>? captures,
+        FluidCell[]? locals = null)
     {
         public PCodeFunction Function { get; } = function;
-        public FluidCell[] Locals { get; } = CreateLocals(localCount);
+        public FluidCell[] Locals { get; } = locals ?? CreateLocals(localCount);
         public FluidCell[] Captures { get; } = captures?.ToArray() ?? Array.Empty<FluidCell>();
         public int Ip { get; set; } = ip;
         public int StackBase { get; } = stackBase;
