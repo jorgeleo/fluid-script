@@ -19,7 +19,7 @@ public sealed class VirtualMachine
         if (module.EntryFunction < 0 || module.EntryFunction >= module.Functions.Count)
             throw new ArgumentException("The P-code entry function is invalid.", nameof(module));
 
-        var globals = Enumerable.Repeat(FluidValue.Null, module.GlobalCount).ToArray();
+        var globals = new FluidValue[module.GlobalCount];
         LoadGlobals(module, globals, context);
         return Execute(module, module.EntryFunction, Array.Empty<FluidValue>(), globals, context, instructionLimit);
     }
@@ -34,9 +34,14 @@ public sealed class VirtualMachine
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentException.ThrowIfNullOrWhiteSpace(functionName);
-        var functionId = module.Functions
-            .Select((function, index) => (function, index))
-            .FirstOrDefault(item => string.Equals(item.function.Name, functionName, StringComparison.Ordinal)).index;
+        var functionId = -1;
+        for (var index = 0; index < module.Functions.Count; index++)
+        {
+            if (!string.Equals(module.Functions[index].Name, functionName, StringComparison.Ordinal))
+                continue;
+            functionId = index;
+            break;
+        }
         if (functionId < 0 || functionId >= module.Functions.Count ||
             !string.Equals(module.Functions[functionId].Name, functionName, StringComparison.Ordinal))
             throw new ArgumentException($"The script function '{functionName}' was not found.", nameof(functionName));
@@ -299,15 +304,15 @@ public sealed class VirtualMachine
 
     private static void LoadGlobals(PCodeModule module, FluidValue[] globals, FluidScriptExecutionContext context)
     {
-        foreach (var (name, index) in module.GlobalNames.Select((name, index) => (name, index)))
-            if (context.Globals.TryGetValue(name, out var value))
+        for (var index = 0; index < module.GlobalNames.Count; index++)
+            if (context.Globals.TryGetValue(module.GlobalNames[index], out var value))
                 globals[index] = value;
     }
 
     private static void SaveGlobals(PCodeModule module, FluidValue[] globals, FluidScriptExecutionContext context)
     {
-        foreach (var (name, index) in module.GlobalNames.Select((name, index) => (name, index)))
-            context.Globals[name] = globals[index];
+        for (var index = 0; index < module.GlobalNames.Count; index++)
+            context.Globals[module.GlobalNames[index]] = globals[index];
     }
 
     private static bool HandleFault(RuntimeFaultException fault, List<Frame> frames, List<FluidValue> stack)
@@ -362,13 +367,9 @@ public sealed class VirtualMachine
         if (frames.Count >= MaxCallDepth)
             Fault("FS5005", "The call-depth limit was exceeded.", instruction.Span, caller.Function.Name);
 
-        var arguments = new FluidValue[instruction.OperandB];
-        for (var i = arguments.Length - 1; i >= 0; i--)
-            arguments[i] = Pop(stack, caller);
-
-        var frame = new Frame(function, function.LocalCount, 0, stack.Count, null);
-        for (var index = 0; index < arguments.Length; index++)
-            frame.Locals[index].Value = arguments[index];
+        var frame = new Frame(function, function.LocalCount, 0, stack.Count - instruction.OperandB, null);
+        for (var index = instruction.OperandB - 1; index >= 0; index--)
+            frame.Locals[index].Value = Pop(stack, caller);
         frames.Add(frame);
     }
 
@@ -381,10 +382,9 @@ public sealed class VirtualMachine
     {
         if (instruction.OperandB < 0)
             Fault("FS2005", "Call arity is invalid.", instruction.Span, caller.Function.Name);
-        var arguments = new FluidValue[instruction.OperandB];
-        for (var i = arguments.Length - 1; i >= 0; i--)
-            arguments[i] = Pop(stack, caller);
-        var target = Pop(stack, caller);
+        if (stack.Count - caller.StackBase < instruction.OperandB + 1)
+            Fault("FS4004", "Operand stack underflow.", instruction.Span, caller.Function.Name);
+        var target = stack[stack.Count - instruction.OperandB - 1];
         if (target.Kind != FluidValueKind.Function)
             Fault("FS5007", "The value is not callable.", instruction.Span, caller.Function.Name);
         var functionId = ((FunctionHandle)target.Raw!).FunctionId;
@@ -399,9 +399,10 @@ public sealed class VirtualMachine
         if (frames.Count >= MaxCallDepth)
             Fault("FS5005", "The call-depth limit was exceeded.", instruction.Span, caller.Function.Name);
 
-        var frame = new Frame(function, function.LocalCount, 0, stack.Count, handle.Captures);
-        for (var index = 0; index < arguments.Length; index++)
-            frame.Locals[index].Value = arguments[index];
+        var frame = new Frame(function, function.LocalCount, 0, stack.Count - instruction.OperandB - 1, handle.Captures);
+        for (var index = instruction.OperandB - 1; index >= 0; index--)
+            frame.Locals[index].Value = Pop(stack, caller);
+        Pop(stack, caller);
         frames.Add(frame);
     }
 
@@ -597,10 +598,11 @@ public sealed class VirtualMachine
     {
         if (instruction.OperandA < 0)
             Fault("FS4005", "Array element count is invalid.", instruction.Span, frame.Function.Name);
-        var elements = new FluidValue[instruction.OperandA];
-        for (var index = elements.Length - 1; index >= 0; index--)
-            elements[index] = Pop(stack, frame);
-        Push(stack, FluidValue.FromArray(elements.ToList()), frame);
+        var elements = new List<FluidValue>(instruction.OperandA);
+        for (var index = instruction.OperandA - 1; index >= 0; index--)
+            elements.Add(Pop(stack, frame));
+        elements.Reverse();
+        Push(stack, FluidValue.FromArray(elements), frame);
     }
 
     private static void MakeDictionary(Instruction instruction, List<FluidValue> stack, Frame frame)
@@ -618,7 +620,7 @@ public sealed class VirtualMachine
             entries[index] = new KeyValuePair<string, FluidValue>(key.AsString(), value);
         }
 
-        var dictionary = new Dictionary<string, FluidValue>(StringComparer.Ordinal);
+        var dictionary = new Dictionary<string, FluidValue>(instruction.OperandA, StringComparer.Ordinal);
         foreach (var entry in entries)
             dictionary[entry.Key] = entry.Value;
         Push(stack, FluidValue.FromDictionary(new FluidDictionary(dictionary)), frame);
@@ -951,13 +953,22 @@ public sealed class VirtualMachine
     private sealed class Frame(PCodeFunction function, int localCount, int ip, int stackBase, IReadOnlyList<FluidCell>? captures)
     {
         public PCodeFunction Function { get; } = function;
-        public FluidCell[] Locals { get; } = Enumerable.Range(0, localCount).Select(_ => new FluidCell(FluidValue.Null)).ToArray();
+        public FluidCell[] Locals { get; } = CreateLocals(localCount);
         public FluidCell[] Captures { get; } = captures?.ToArray() ?? Array.Empty<FluidCell>();
         public int Ip { get; set; } = ip;
         public int StackBase { get; } = stackBase;
         public SourceSpan CurrentSpan { get; set; } = SourceSpan.None;
         public List<Handler> Handlers { get; } = new();
         public RuntimeFaultException? PendingFault { get; set; }
+
+        private static FluidCell[] CreateLocals(int count)
+        {
+            var locals = new FluidCell[count];
+            for (var index = 0; index < count; index++)
+                locals[index] = new FluidCell(FluidValue.Null);
+            return locals;
+        }
+
     }
 
     private readonly record struct Handler(int Target, int StackDepth, int FilterKind);

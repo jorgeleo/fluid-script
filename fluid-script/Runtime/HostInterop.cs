@@ -264,7 +264,8 @@ internal static class HostBinding
 
     private static Candidate SelectCandidate(IEnumerable<MethodBase> methods, IReadOnlyList<FluidValue> arguments, FluidScriptHost host, string description)
     {
-        var candidates = new List<Candidate>();
+        Candidate? best = null;
+        var ambiguous = false;
         foreach (var method in methods)
         {
             var parameters = method.GetParameters();
@@ -291,17 +292,25 @@ internal static class HostBinding
                     break;
                 }
             }
-            if (valid)
-                candidates.Add(new Candidate(method, converted, score));
+            if (!valid)
+                continue;
+            var candidate = new Candidate(method, converted, score);
+            if (best is null || candidate.Score < best.Value.Score)
+            {
+                best = candidate;
+                ambiguous = false;
+            }
+            else if (candidate.Score == best.Value.Score)
+            {
+                ambiguous = true;
+            }
         }
 
-        if (candidates.Count == 0)
+        if (best is null)
             throw new HostBindingException($"No {description} accepts the supplied arguments.");
-        var bestScore = candidates.Min(candidate => candidate.Score);
-        var best = candidates.Where(candidate => candidate.Score == bestScore).ToArray();
-        if (best.Length != 1)
+        if (ambiguous)
             throw new HostBindingException($"The {description} call is ambiguous.");
-        return best[0];
+        return best.Value;
     }
 
     private static FluidValue ToFluid(object? value, FluidScriptHost host)
@@ -439,5 +448,5 @@ internal static class HostBinding
         type == typeof(ushort) || type == typeof(int) || type == typeof(uint) || type == typeof(long) || type == typeof(ulong) ||
         type == typeof(float) || type == typeof(double) || type == typeof(decimal);
 
-    private sealed record Candidate(MethodBase Method, object?[] Arguments, int Score);
+    private readonly record struct Candidate(MethodBase Method, object?[] Arguments, int Score);
 }
