@@ -69,10 +69,30 @@ round trip. To restore a declared object, use
 `jsonDeserializeAs(Profile, text)`: the selected type's JSON must contain
 exactly its declared fields, and the result has that nominal type. Duplicate
 JSON property names use their final value. Date/time, GUID, byte, function,
-and captured-cell values have no implicit JSON conversion; `jsonSerialize`
+captured-cell values, and regular expressions have no implicit JSON conversion;
+`jsonSerialize`
 rejects them. Both JSON conversion failures use `FS5016` in a script. Because
 FluidScript strings interpolate `{...}`, use `{{` and `}}` for literal JSON
 braces in source strings.
+
+## Standard runtime libraries
+
+The VM registers four runtime libraries through `IRegister`: `String`, `RegExp`,
+`Number`, and `Math`. Their implementations live in the runtime and are
+available without host-specific compiler intrinsics. `String` provides
+conversion, indexing, search, slicing, padding, replacement, splitting,
+case/trim, normalization, and matching functions. `RegExp(pattern, flags)`
+supports `d`, `g`, `i`, `m`, `s`, `u`, `v`, and `y`, with `source`, `flags`,
+`lastIndex`, `test`, `exec`, and `toString` members. `Number` provides numeric
+conversion, `parseFloat`, `parseInt`, integer predicates, safe-integer
+constants, `toFixed`, and radix-aware `toString`. `Math` provides common
+constants and arithmetic, rounding, trigonometric, logarithmic, random, and
+32-bit helper functions.
+
+The compiler resolves these as ordinary registered native functions and
+properties; it does not contain library-specific function tables. Standard
+library failures use runtime fault `FS5018`. FluidScript numbers are finite
+`int`/`decimal` values, so JavaScript `NaN` and infinities are not representable.
 
 ## Evaluation and control flow
 

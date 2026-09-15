@@ -8,6 +8,13 @@ public sealed class VirtualMachine
 {
     private const int MaxStack = 100_000;
     private const int MaxCallDepth = 1_024;
+    private static readonly IRegister[] NativeRegisters =
+    {
+        new StringLibrary(),
+        new RegExpLibrary(),
+        new NumberLibrary(),
+        new MathLibrary()
+    };
 
     public FluidValue Run(PCodeModule module, Action<string>? output = null, int instructionLimit = 1_000_000)
         => Run(module, new FluidScriptExecutionContext(output: output), instructionLimit);
@@ -16,6 +23,7 @@ public sealed class VirtualMachine
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentNullException.ThrowIfNull(context);
+        context = RegisterNativeLibraries(context);
         if (module.EntryFunction < 0 || module.EntryFunction >= module.Functions.Count)
             throw new ArgumentException("The P-code entry function is invalid.", nameof(module));
 
@@ -47,9 +55,20 @@ public sealed class VirtualMachine
             throw new ArgumentException($"The script function '{functionName}' was not found.", nameof(functionName));
 
         context ??= new FluidScriptExecutionContext();
+        context = RegisterNativeLibraries(context);
         var globals = Enumerable.Repeat(FluidValue.Null, module.GlobalCount).ToArray();
         LoadGlobals(module, globals, context);
         return Execute(module, functionId, arguments ?? Array.Empty<FluidValue>(), globals, context, instructionLimit);
+    }
+
+    private static FluidScriptExecutionContext RegisterNativeLibraries(FluidScriptExecutionContext context)
+    {
+        var host = context.Host ?? new FluidScriptHost();
+        foreach (var register in NativeRegisters)
+            register.Register(host);
+        return context.Host is null
+            ? new FluidScriptExecutionContext(host, context.Globals, context.Output)
+            : context;
     }
 
     private static FluidValue Execute(
@@ -483,6 +502,14 @@ public sealed class VirtualMachine
         catch (RuntimeFaultException)
         {
             throw;
+        }
+        catch (StandardLibraryException exception) when (instruction.OperandA <= -10)
+        {
+            throw new RuntimeFaultException("FS5018", exception.Message, instruction.Span, frame.Function.Name);
+        }
+        catch (Exception exception) when (instruction.OperandA <= -10 && exception is (ArgumentException or OverflowException or FormatException or InvalidOperationException))
+        {
+            throw new RuntimeFaultException("FS5018", $"Standard-library operation failed: {exception.Message}", instruction.Span, frame.Function.Name);
         }
         catch (Exception exception)
         {

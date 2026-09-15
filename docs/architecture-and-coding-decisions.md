@@ -148,7 +148,8 @@ not language-level control flow.
 
 `FluidValue` is the public tagged value representation for `null`, booleans,
 integers, decimals, strings, dates, GUIDs, bytes, arrays, dictionaries,
-functions, script objects, registered CLR objects, and captured cells. Arrays,
+functions, script objects, registered CLR objects (including regular
+expressions), and captured cells. Arrays,
 dictionaries, script objects, and registered CLR objects preserve reference
 identity when mutated; captured variables use `FluidCell` so closures observe
 updates after the creating frame exits. CLR access is explicit and capability
@@ -194,6 +195,9 @@ Host behavior is explicitly registered through `FluidScriptHost`. A
 compile time to registry IDs, with ID `0` reserved for the built-in `print`.
 `jsonSerialize`, `jsonDeserialize`, and `jsonDeserializeAs` use reserved
 negative intrinsic IDs, so they do not shift append-only host capability IDs.
+The standard runtime libraries implement `IRegister` and are invoked by the VM
+to register their native functions and properties; compiler code resolves the
+generic host registry and does not implement library behavior.
 The VM exposes no ambient reflection, I/O, filesystem, network, or process
 capability. Registered CLR types are an explicit reflection capability: their
 public instance constructors, properties, fields, and methods are lowered to

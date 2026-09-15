@@ -40,6 +40,9 @@ public sealed class FluidScriptHost
     internal const int JsonDeserializeAsBuiltinId = -3;
     private readonly List<NativeFunction> functions = new();
     private readonly Dictionary<string, int> names = new(StringComparer.Ordinal);
+    private readonly Dictionary<int, NativeFunction> functionsById = new();
+    private readonly Dictionary<string, string> functionReturnTypes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, NativePropertyRegistration> properties = new(StringComparer.Ordinal);
     private readonly List<HostTypeRegistration> types = new();
     private readonly Dictionary<string, HostTypeRegistration> typeNames = new(StringComparer.Ordinal);
 
@@ -55,6 +58,7 @@ public sealed class FluidScriptHost
         var id = functions.Count + 1;
         names.Add(name, id);
         functions.Add(function);
+        functionsById.Add(id, function);
         return id;
     }
 
@@ -63,15 +67,7 @@ public sealed class FluidScriptHost
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(clrType);
-        if (IsBuiltinName(name))
-            throw new ArgumentException($"The '{name}' builtin is reserved.", nameof(name));
-        if (names.ContainsKey(name) || typeNames.ContainsKey(name))
-            throw new ArgumentException($"A host capability named '{name}' is already registered.", nameof(name));
-
-        var registration = new HostTypeRegistration(types.Count + 1, name, clrType);
-        types.Add(registration);
-        typeNames.Add(name, registration);
-        return registration.Id;
+        return RegisterTypeCore(name, clrType, allowBuiltinName: false);
     }
 
     public int RegisterType<T>(string name) => RegisterType(name, typeof(T));
@@ -83,6 +79,23 @@ public sealed class FluidScriptHost
 
     public bool Contains(string name) => names.ContainsKey(name) || typeNames.ContainsKey(name);
     public bool ContainsType(string name) => typeNames.ContainsKey(name);
+
+    /// <summary>Creates a host containing the standard runtime library registrations.</summary>
+    public static FluidScriptHost CreateStandardLibraryHost()
+    {
+        var host = new FluidScriptHost();
+        host.RegisterStandardLibraries();
+        return host;
+    }
+
+    /// <summary>Registers the standard libraries on this host if they are not already present.</summary>
+    public void RegisterStandardLibraries()
+    {
+        new StringLibrary().Register(this);
+        new RegExpLibrary().Register(this);
+        new NumberLibrary().Register(this);
+        new MathLibrary().Register(this);
+    }
 
     /// <summary>
     /// Wraps an instance whose runtime type is covered by one of this host's
@@ -124,23 +137,89 @@ public sealed class FluidScriptHost
 
     internal bool TryGetFunction(int id, out NativeFunction? function)
     {
-        var index = id - 1;
-        if (index >= 0 && index < functions.Count)
-        {
-            function = functions[index];
-            return true;
-        }
+        return functionsById.TryGetValue(id, out function);
+    }
 
-        function = null;
-        return false;
+    internal bool TryGetNativeFunctionId(string name, out int id) => names.TryGetValue(name, out id);
+
+    internal bool TryGetNativeFunctionReturnType(string name, out string returnType) => functionReturnTypes.TryGetValue(name, out returnType!);
+
+    internal bool TryGetNativeProperty(string name, out NativePropertyRegistration property) => properties.TryGetValue(name, out property!);
+
+    internal void RegisterLibraryFunction(string name, int id, NativeFunction function, string returnType = "any")
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(function);
+        if (id >= 0 || id is -1 or -2 or -3)
+            throw new ArgumentOutOfRangeException(nameof(id), "Library function IDs must use the reserved negative range.");
+        if (names.TryGetValue(name, out var existingId))
+        {
+            if (existingId != id)
+                throw new ArgumentException($"A native function named '{name}' is already registered.", nameof(name));
+            return;
+        }
+        if (functionsById.TryGetValue(id, out var existingFunction))
+        {
+            if (!Equals(existingFunction, function))
+                throw new ArgumentException($"Native function ID '{id}' is already registered.", nameof(id));
+            names.Add(name, id);
+            functionReturnTypes[name] = returnType;
+            return;
+        }
+        names.Add(name, id);
+        functionsById.Add(id, function);
+        functionReturnTypes[name] = returnType;
+    }
+
+    internal int RegisterLibraryType(string name, Type clrType) => RegisterTypeCore(name, clrType, allowBuiltinName: true);
+
+    private int RegisterTypeCore(string name, Type clrType, bool allowBuiltinName)
+    {
+        if (!allowBuiltinName && IsBuiltinName(name))
+            throw new ArgumentException($"The '{name}' builtin is reserved.", nameof(name));
+        if (typeNames.TryGetValue(name, out var existing))
+        {
+            if (allowBuiltinName && existing.ClrType == clrType)
+                return existing.Id;
+            throw new ArgumentException($"A host capability named '{name}' is already registered.", nameof(name));
+        }
+        if (names.ContainsKey(name))
+            throw new ArgumentException($"A host capability named '{name}' is already registered.", nameof(name));
+
+        var registration = new HostTypeRegistration(types.Count + 1, name, clrType);
+        types.Add(registration);
+        typeNames.Add(name, registration);
+        return registration.Id;
+    }
+
+    internal void RegisterLibraryProperty(
+        string name,
+        int getterId,
+        NativeFunction getter,
+        int? setterId,
+        NativeFunction? setter,
+        string returnType,
+        bool writable)
+    {
+        RegisterLibraryFunction(name, getterId, getter, returnType);
+        if (setterId is not null && setter is not null)
+            RegisterLibraryFunction(name + "=", setterId.Value, setter, "null");
+        properties[name] = new NativePropertyRegistration(getterId, setterId, returnType, writable);
     }
 
     internal static bool IsBuiltinName(string name) =>
-        name is "print" or "jsonSerialize" or "jsonDeserialize" or "jsonDeserializeAs";
+        name is "print" or "jsonSerialize" or "jsonDeserialize" or "jsonDeserializeAs" or
+        "String" or "RegExp" or "Number" or "Math" ||
+        name.StartsWith("String.", StringComparison.Ordinal) ||
+        name.StartsWith("RegExp.", StringComparison.Ordinal) ||
+        name.StartsWith("Number.", StringComparison.Ordinal) ||
+        name.StartsWith("Math.", StringComparison.Ordinal);
 
     internal static bool IsJsonBuiltinName(string name) =>
         name is "jsonSerialize" or "jsonDeserialize" or "jsonDeserializeAs";
 }
+
+internal sealed record NativePropertyRegistration(int GetterId, int? SetterId, string ReturnType, bool Writable);
 
 /// <summary>State and capabilities supplied to one VM execution.</summary>
 public sealed class FluidScriptExecutionContext

@@ -37,16 +37,17 @@ public sealed class CompilationResult
 public static class FluidScriptCompiler
 {
     public static CompilationResult Compile(string source, IFluidModuleResolver? resolver = null)
-        => CompileCore(source, resolver, null, new ModuleCompilationSession());
+        => CompileCore(source, resolver, FluidScriptHost.CreateStandardLibraryHost(), new ModuleCompilationSession());
 
     public static CompilationResult Compile(string source, FluidScriptHost host, IFluidModuleResolver? resolver = null)
     {
         ArgumentNullException.ThrowIfNull(host);
+        host.RegisterStandardLibraries();
         return CompileCore(source, resolver, host, new ModuleCompilationSession());
     }
 
     internal static CompilationResult CompileCore(string source, IFluidModuleResolver? resolver, ModuleCompilationSession session)
-        => CompileCore(source, resolver, null, session);
+        => CompileCore(source, resolver, FluidScriptHost.CreateStandardLibraryHost(), session);
 
     internal static CompilationResult CompileCore(string source, IFluidModuleResolver? resolver, FluidScriptHost? host, ModuleCompilationSession session)
     {
@@ -105,7 +106,7 @@ internal sealed class CompilerEngine
         var topLevelFunctions = script.Statements.OfType<FunctionNode>().ToArray();
         foreach (var type in script.Statements.OfType<TypeNode>())
         {
-            if (FluidScriptHost.IsJsonBuiltinName(type.Name) || host?.ContainsType(type.Name) == true || host?.Contains(type.Name) == true)
+            if (FluidScriptHost.IsBuiltinName(type.Name) || host?.ContainsType(type.Name) == true || host?.Contains(type.Name) == true)
             {
                 Error("FS2200", $"The builtin name '{type.Name}' cannot be used as a type.", type.Span);
                 continue;
@@ -134,7 +135,7 @@ internal sealed class CompilerEngine
         functionIds["__main"] = 0;
         foreach (var function in topLevelFunctions)
         {
-            if (FluidScriptHost.IsJsonBuiltinName(function.Name) || host?.ContainsType(function.Name) == true || host?.Contains(function.Name) == true)
+            if (FluidScriptHost.IsBuiltinName(function.Name) || host?.ContainsType(function.Name) == true || host?.Contains(function.Name) == true)
             {
                 Error("FS2007", $"The builtin name '{function.Name}' cannot be used as a function.", function.Span);
                 continue;
@@ -405,7 +406,7 @@ internal sealed class CompilerEngine
                 else
                 {
                     var inferredType = InferType(variable.Initializer, context);
-                    if (variable.TypeName is null && (typeIds.ContainsKey(inferredType) || host?.ContainsType(inferredType) == true))
+                    if (variable.TypeName is null && inferredType is not ("any" or "null"))
                     {
                         if (context.IsMain)
                             globalTypes[variable.Name] = inferredType;
@@ -542,6 +543,27 @@ internal sealed class CompilerEngine
     private void CompileMemberAssignment(MemberNode target, string operatorText, ExpressionNode value, FunctionContext context, CodeBuilder builder, SourceSpan span)
     {
         var typeName = InferType(target.Target, context);
+        if (TryGetNativeProperty(target, context, out var nativeProperty, out var staticProperty))
+        {
+            if (staticProperty || !nativeProperty.Writable || nativeProperty.SetterId is null)
+            {
+                Error("FS2203", $"Cannot assign to standard-library member '{target.Name}'.", target.Span);
+                return;
+            }
+            CompileExpression(target.Target, context, builder);
+            if (operatorText == "=")
+                CompileExpression(value, context, builder);
+            else
+            {
+                builder.Emit(OpCode.Dup, span: target.Span);
+                builder.Emit(OpCode.CallNative, nativeProperty.GetterId, 1, span: target.Span);
+                CompileExpression(value, context, builder);
+                builder.Emit(BinaryOpcode(operatorText[..^1]), span: span);
+            }
+            builder.Emit(OpCode.CallNative, nativeProperty.SetterId.Value, 2, span: span);
+            builder.Emit(OpCode.Pop, span: span);
+            return;
+        }
         if (TryGetHostType(typeName, out var hostTypeId, out var hostType) || typeName == "any")
         {
             if (typeName != "any" && !hostType!.Properties.ContainsKey(target.Name) && !hostType.Fields.ContainsKey(target.Name))
@@ -804,6 +826,13 @@ internal sealed class CompilerEngine
                 builder.Emit(OpCode.IndexGet, span: index.Span);
                 break;
             case MemberNode member:
+                if (TryGetNativeProperty(member, context, out var nativeProperty, out var staticProperty))
+                {
+                    if (!staticProperty)
+                        CompileExpression(member.Target, context, builder);
+                    builder.Emit(OpCode.CallNative, nativeProperty.GetterId, staticProperty ? 0 : 1, span: member.Span);
+                    break;
+                }
                 var memberType = InferType(member.Target, context);
                 if (TryGetHostType(memberType, out var hostTypeId, out var hostType) || memberType == "any")
                 {
@@ -892,10 +921,65 @@ internal sealed class CompilerEngine
             builder.Emit(OpCode.Const, AddConstant(FluidValue.From(string.Empty)), span: interpolated.Span);
     }
 
+    private bool TryGetNativeProperty(MemberNode member, FunctionContext context, out NativePropertyRegistration property, out bool staticProperty)
+    {
+        property = null!;
+        staticProperty = false;
+        if (host is null)
+            return false;
+        if (member.Target is NameNode root && host.TryGetNativeProperty(root.Name + "." + member.Name, out property))
+        {
+            staticProperty = true;
+            return true;
+        }
+        var ownerType = InferType(member.Target, context);
+        return host.TryGetNativeProperty(ownerType + "." + member.Name, out property);
+    }
+
+    private bool TryGetNativeMethod(MemberNode member, FunctionContext context, out int nativeId, out bool staticMethod)
+    {
+        nativeId = 0;
+        staticMethod = false;
+        if (host is null)
+            return false;
+        if (member.Target is NameNode root && host.TryGetNativeFunctionId(root.Name + "." + member.Name, out nativeId))
+        {
+            staticMethod = true;
+            return true;
+        }
+        var ownerType = InferType(member.Target, context);
+        return host.TryGetNativeFunctionId(ownerType + "." + member.Name, out nativeId);
+    }
+
+    private bool TryGetNativeReturnType(MemberNode member, FunctionContext context, out string returnType)
+    {
+        returnType = "any";
+        if (host is null)
+            return false;
+        if (member.Target is NameNode root && host.TryGetNativeFunctionReturnType(root.Name + "." + member.Name, out returnType!))
+            return true;
+        return host.TryGetNativeFunctionReturnType(InferType(member.Target, context) + "." + member.Name, out returnType!);
+    }
+
     private void CompileCall(CallNode call, FunctionContext context, CodeBuilder builder)
     {
         if (call.Target is MemberNode member)
         {
+            if (TryGetNativeMethod(member, context, out var nativeId, out var staticMethod))
+            {
+                if (call.Arguments.Any(argument => argument.Name is not null))
+                {
+                    Error("FS2105", "Native method calls accept positional arguments only.", call.Span);
+                    builder.Emit(OpCode.Null, span: call.Span);
+                    return;
+                }
+                if (!staticMethod)
+                    CompileExpression(member.Target, context, builder);
+                foreach (var argument in call.Arguments)
+                    CompileExpression(argument.Value, context, builder);
+                builder.Emit(OpCode.CallNative, nativeId, call.Arguments.Count + (staticMethod ? 0 : 1), span: call.Span);
+                return;
+            }
             var ownerType = InferType(member.Target, context);
             if (TryGetHostType(ownerType, out var hostTypeId, out var hostType) || ownerType == "any")
             {
@@ -962,6 +1046,12 @@ internal sealed class CompilerEngine
             }
             builder.Emit(OpCode.Call, functionId, ordered.Count, span: call.Span);
         }
+        else if (host is not null && host.TryGetFunctionId(target.Name, out var nativeId))
+        {
+            foreach (var argument in call.Arguments)
+                CompileExpression(argument.Value, context, builder);
+            builder.Emit(OpCode.CallNative, nativeId, call.Arguments.Count, span: call.Span);
+        }
         else if (typeIds.TryGetValue(target.Name, out var typeId))
         {
             var type = typeDeclarations[target.Name];
@@ -991,12 +1081,6 @@ internal sealed class CompilerEngine
             foreach (var argument in call.Arguments)
                 CompileExpression(argument.Value, context, builder);
             builder.Emit(OpCode.CallNative, 0, call.Arguments.Count, span: call.Span);
-        }
-        else if (host is not null && host.TryGetFunctionId(target.Name, out var nativeId))
-        {
-            foreach (var argument in call.Arguments)
-                CompileExpression(argument.Value, context, builder);
-            builder.Emit(OpCode.CallNative, nativeId, call.Arguments.Count, span: call.Span);
         }
         else
         {
@@ -1449,7 +1533,7 @@ internal sealed class CompilerEngine
         }
         var baseName = normalized.TrimEnd('[', ']');
         var isArray = normalized.EndsWith("[]", StringComparison.Ordinal);
-        if (baseName is not ("any" or "null" or "bool" or "int" or "decimal" or "string" or "datetime" or "guid" or "byte" or "dict") &&
+        if (baseName is not ("any" or "null" or "bool" or "int" or "decimal" or "string" or "datetime" or "guid" or "byte" or "dict" or "RegExp") &&
             !typeIds.ContainsKey(baseName) && (host is null || !host.ContainsType(baseName)))
             Error("FS2100", $"Unknown type '{baseName}'.", span);
         return isArray ? baseName + "[]" : baseName;
@@ -1489,6 +1573,7 @@ internal sealed class CompilerEngine
         BinaryNode binary when binary.Operator is "==" or "!=" or "<" or "<=" or ">" or ">=" or "&&" or "||" => "bool",
         BinaryNode binary when binary.Operator == "+" && InferType(binary.Left, context) == "string" && InferType(binary.Right, context) == "string" => "string",
         BinaryNode binary => InferNumericType(InferType(binary.Left, context), InferType(binary.Right, context)),
+        CallNode call when call.Target is NameNode name && host?.TryGetNativeFunctionReturnType(name.Name, out var nativeReturnType) == true => nativeReturnType,
         CallNode call when call.Target is NameNode name && functionReturnTypes.TryGetValue(name.Name, out var returnType) => returnType,
         CallNode call when call.Target is NameNode { Name: "print" } => "null",
         CallNode call when call.Target is NameNode { Name: "jsonSerialize" } => "string",
@@ -1496,6 +1581,7 @@ internal sealed class CompilerEngine
         CallNode call when call.Target is NameNode { Name: "jsonDeserializeAs" } &&
             call.Arguments.Count > 0 && call.Arguments[0].Value is NameNode typeName && typeIds.ContainsKey(typeName.Name) => typeName.Name,
         CallNode call when call.Target is NameNode name && (typeIds.ContainsKey(name.Name) || host?.ContainsType(name.Name) == true) => name.Name,
+        CallNode call when call.Target is MemberNode member && TryGetNativeReturnType(member, context, out var nativeMethodReturnType) => nativeMethodReturnType,
         CallNode call when call.Target is MemberNode member && functionReturnTypes.TryGetValue(MethodKey(InferType(member.Target, context), member.Name), out var methodReturnType) => methodReturnType,
         LambdaNode => "fn",
         InterpolatedStringNode => "string",
@@ -1516,6 +1602,8 @@ internal sealed class CompilerEngine
 
     private string InferMemberType(MemberNode member, FunctionContext context)
     {
+        if (TryGetNativeProperty(member, context, out var nativeProperty, out _))
+            return nativeProperty.ReturnType;
         var ownerType = InferType(member.Target, context);
         if (TryGetHostType(ownerType, out _, out var hostType))
         {

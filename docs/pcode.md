@@ -53,8 +53,10 @@ callee's parameter slots. A callee's return value is pushed on the caller's
 stack; `ReturnVoid` produces `null`. `CallNative` reserves builtin ID `0` for
 `print(value)` and IDs `-1` and `-2` for `jsonSerialize(value)` and
 `jsonDeserialize(text)`, plus ID `-3` for `jsonDeserializeAs(Type, text)`.
-The negative IDs leave append-only host capability IDs unchanged. Other native
-calls are intentionally capability-limited.
+The standard runtime libraries register their stable native IDs in the reserved
+negative range starting at `-10`; they are installed by the VM through
+`IRegister`. The negative IDs leave append-only host capability IDs unchanged.
+Other native calls are intentionally capability-limited.
 
 Host object opcodes carry a stable registration identifier and a string constant
 for the property or method name. A type identifier of `-1` means dynamic host
