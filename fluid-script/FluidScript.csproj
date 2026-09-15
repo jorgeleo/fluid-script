@@ -4,6 +4,14 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <PackageId>FluidScript</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>FluidScript contributors</Authors>
+    <Description>A capability-based scripting language and deterministic virtual machine for .NET applications.</Description>
+    <PackageTags>scripting;rules;automation;vm;dotnet</PackageTags>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,6 +26,11 @@
       <Error>true</Error>
       <Package>FluidScript.Generated</Package>
     </Antlr4>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\fluidscript.jpeg" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>

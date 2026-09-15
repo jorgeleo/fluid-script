@@ -91,6 +91,24 @@ editing, syntax highlighting, diagnostics, execution, breakpoints, detached
 debug checkpoints, and JSON-native variable edits. It is a development sample,
 not a production-ready multi-user execution service.
 
+## Create a NuGet package
+
+The release helpers increment the patch component in
+`fluid-script/FluidScript.csproj`, create a Release package in
+`artifacts/nuget/`, and persist the version only after packaging succeeds.
+
+On Windows:
+
+```bat
+pack-nuget.bat
+```
+
+On macOS or another zsh host:
+
+```sh
+./pack-nuget.sh
+```
+
 ## Documentation
 
 - [User manual](docs/user_manual.md) — learn the language, values, functions,
