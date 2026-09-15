@@ -16,7 +16,8 @@ public enum FluidValueKind
     Function,
     Object,
     Cell,
-    Dictionary
+    Dictionary,
+    HostObject
 }
 
 public readonly record struct FluidValue(FluidValueKind Kind, object? Raw)
@@ -34,6 +35,7 @@ public readonly record struct FluidValue(FluidValueKind Kind, object? Raw)
     public static FluidValue FromFunction(int functionId) => new(FluidValueKind.Function, new FunctionHandle(functionId));
     public static FluidValue FromFunction(int functionId, IReadOnlyList<FluidCell> captures) => new(FluidValueKind.Function, new FunctionHandle(functionId, captures));
     public static FluidValue FromObject(FluidObject value) => new(FluidValueKind.Object, value);
+    public static FluidValue FromHostObject(FluidHostObject value) => new(FluidValueKind.HostObject, value);
     public static FluidValue FromCell(FluidCell value) => new(FluidValueKind.Cell, value);
 
     public bool AsBool() => Kind == FluidValueKind.Bool
@@ -67,6 +69,10 @@ public readonly record struct FluidValue(FluidValueKind Kind, object? Raw)
         ? (FluidObject)Raw!
         : throw new InvalidOperationException("Expected an object value.");
 
+    public FluidHostObject AsHostObject() => Kind == FluidValueKind.HostObject
+        ? (FluidHostObject)Raw!
+        : throw new InvalidOperationException("Expected a host object value.");
+
     public FluidCell AsCell() => Kind == FluidValueKind.Cell
         ? (FluidCell)Raw!
         : throw new InvalidOperationException("Expected a captured cell.");
@@ -86,6 +92,7 @@ public readonly record struct FluidValue(FluidValueKind Kind, object? Raw)
         FluidValueKind.Function => $"<function {((FunctionHandle)Raw!).FunctionId}>",
         FluidValueKind.Object => AsObject().ToString(),
         FluidValueKind.Cell => AsCell().Value.ToString(),
+        FluidValueKind.HostObject => AsHostObject().ToString(),
         _ => Raw?.ToString() ?? "null"
     };
 }

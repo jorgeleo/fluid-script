@@ -31,6 +31,10 @@ operand stack and pushes its result:
 | `NewObject` | `1 - fieldCount` |
 | `FieldGet` | `0` |
 | `FieldSet` | `-2` |
+| `HostNewObject` | `1 - argumentCount` |
+| `HostGetProperty` | `0` |
+| `HostSetProperty` | `-2` |
+| `HostCallMethod` | `1 - (argumentCountIncludingReceiver)` |
 | `EnterHandler`, `LeaveHandler` | `0` |
 | `ToText` | `0` |
 | `Throw`, `Rethrow` | consumes one value and transfers control |
@@ -51,6 +55,13 @@ stack; `ReturnVoid` produces `null`. `CallNative` reserves builtin ID `0` for
 `jsonDeserialize(text)`, plus ID `-3` for `jsonDeserializeAs(Type, text)`.
 The negative IDs leave append-only host capability IDs unchanged. Other native
 calls are intentionally capability-limited.
+
+Host object opcodes carry a stable registration identifier and a string constant
+for the property or method name. A type identifier of `-1` means dynamic host
+access (the receiver's registered descriptor is used at runtime); construction
+always requires a non-negative registered type identifier. Serialized P-code
+therefore requires a compatible `FluidScriptHost` registration order when it
+uses host object opcodes.
 
 ## Compatibility
 

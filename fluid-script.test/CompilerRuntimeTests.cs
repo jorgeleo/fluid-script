@@ -588,6 +588,85 @@ public sealed class CompilerRuntimeTests
     }
 
     [TestMethod]
+    public void Registered_clr_types_can_be_constructed_and_used_from_script()
+    {
+        var host = new FluidScriptHost();
+        host.RegisterType("Person", typeof(TestPerson));
+        var result = FluidScriptCompiler.Compile("dim person = Person(\"Ada\", 36)\nperson.Age += 1\nprint(person.Name)\nprint(person.Age)\nprint(person.Greet(\"Hello\"))\n", host);
+        var output = new List<string>();
+
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+        result.Execute(new FluidScriptExecutionContext(host, output: output.Add));
+
+        CollectionAssert.AreEqual(new[] { "Ada", "37", "Hello Ada" }, output);
+    }
+
+    [TestMethod]
+    public void Wrapped_clr_objects_can_cross_globals_and_dynamic_host_access()
+    {
+        var host = new FluidScriptHost();
+        host.RegisterType("Person", typeof(TestPerson));
+        var person = new TestPerson("Grace", 30);
+        host.RegisterFunction("getPerson", _ => host.Wrap(person));
+        var result = FluidScriptCompiler.Compile("dim person = getPerson()\nperson.Age = person.Age + 2\nprint(person.Name)\nprint(person.Age)\n", host);
+        var output = new List<string>();
+
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+        result.Execute(new FluidScriptExecutionContext(host, output: output.Add));
+
+        CollectionAssert.AreEqual(new[] { "Grace", "32" }, output);
+        Assert.AreEqual(32, person.Age);
+    }
+
+    [TestMethod]
+    public void Execution_globals_can_store_registered_clr_objects()
+    {
+        var host = new FluidScriptHost();
+        host.RegisterType("Person", typeof(TestPerson));
+        var result = FluidScriptCompiler.Compile("dim person: Person\nprint(person.Name)\n", host);
+        var output = new List<string>();
+        var globals = new Dictionary<string, FluidValue>(StringComparer.Ordinal)
+        {
+            ["person"] = host.Wrap(new TestPerson("Lin", 28))
+        };
+
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+        result.Execute(new FluidScriptExecutionContext(host, globals, output.Add));
+
+        CollectionAssert.AreEqual(new[] { "Lin" }, output);
+    }
+
+    [TestMethod]
+    public void Registered_clr_object_opcodes_survive_pcode_serialization()
+    {
+        var host = new FluidScriptHost();
+        host.RegisterType("Person", typeof(TestPerson));
+        var source = "dim person = Person(\"Ada\", 36)\nprint(person.Greet(\"Hi\"))\n";
+        var result = FluidScriptCompiler.Compile(source, host);
+        Assert.IsTrue(result.Success, string.Join("; ", result.Diagnostics));
+
+        var module = PCodeSerializer.Deserialize(PCodeSerializer.Serialize(result.Module!, source), source);
+        var output = new List<string>();
+        new VirtualMachine().Run(module, new FluidScriptExecutionContext(host, output: output.Add));
+
+        CollectionAssert.AreEqual(new[] { "Hi Ada" }, output);
+    }
+
+    [TestMethod]
+    public void Registered_clr_object_failures_are_script_runtime_faults()
+    {
+        var host = new FluidScriptHost();
+        host.RegisterType("Person", typeof(TestPerson));
+        var result = FluidScriptCompiler.Compile("dim person = Person(\"Ada\", 36)\nprint(person.Missing())\n", host);
+        Assert.IsFalse(result.Success);
+
+        var runtimeResult = FluidScriptCompiler.Compile("dim person = Person(\"Ada\", 36)\nperson.Age = \"not an int\"\n", host);
+        Assert.IsTrue(runtimeResult.Success, string.Join("; ", runtimeResult.Diagnostics));
+        var fault = Assert.Throws<RuntimeFaultException>(() => runtimeResult.Execute());
+        Assert.AreEqual("FS5017", fault.Code);
+    }
+
+    [TestMethod]
     public void Execution_context_passes_globals_in_and_out()
     {
         var result = FluidScriptCompiler.Compile("dim input: int\ndim output: int\noutput = input * 2\n");
@@ -690,5 +769,18 @@ public sealed class CompilerRuntimeTests
     private sealed class DictionaryModuleResolver(IReadOnlyDictionary<string, string> modules) : IFluidModuleResolver
     {
         public bool TryResolve(string moduleName, out string source) => modules.TryGetValue(moduleName, out source!);
+    }
+
+    private sealed class TestPerson
+    {
+        public TestPerson(string name, int age)
+        {
+            Name = name;
+            Age = age;
+        }
+
+        public string Name { get; }
+        public int Age { get; set; }
+        public string Greet(string greeting) => $"{greeting} {Name}";
     }
 }

@@ -148,13 +148,26 @@ var program = FluidScriptCompiler.Compile(
 program.Execute(new FluidScriptExecutionContext(host, output: Console.WriteLine));
 ```
 
-Decisions still needed:
+The host may also register a CLR type and explicitly wrap instances:
 
-* whether registration is immutable after compilation, or calls are resolved
-  by a host manifest at load time;
-* how host exceptions map to `RuntimeFaultException` and which details are
-  safe to expose;
-* whether host functions may be re-entrant, recursive, or long-running;
+```csharp
+host.RegisterType("Person", typeof(Person));
+var globals = new Dictionary<string, FluidValue>
+{
+    ["person"] = host.Wrap(existingPerson)
+};
+```
+
+FluidScript can then construct `Person(...)`, read/write its public instance
+properties, and call its public instance methods. Access is limited to types
+registered on the supplied host; dynamic member access uses the wrapped
+object's registered descriptor. Constructors and methods bind positional
+arguments deterministically, and failures map to `FS5017`.
+
+Remaining policy decisions:
+
+* whether host functions or registered CLR methods may be re-entrant, recursive,
+  or long-running;
 * whether an async capability is needed (it should be a separate, explicitly
   awaited language feature); and
 * capability naming/versioning and denial diagnostics.

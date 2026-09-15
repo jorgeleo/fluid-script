@@ -55,7 +55,11 @@ public enum OpCode
     ForCheckGlobal,
     ForIncrementGlobal,
     Halt,
-    MakeDictionary
+    MakeDictionary,
+    HostNewObject,
+    HostGetProperty,
+    HostSetProperty,
+    HostCallMethod
 }
 
 public readonly record struct Instruction(

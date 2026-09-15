@@ -105,7 +105,7 @@ internal sealed class CompilerEngine
         var topLevelFunctions = script.Statements.OfType<FunctionNode>().ToArray();
         foreach (var type in script.Statements.OfType<TypeNode>())
         {
-            if (FluidScriptHost.IsJsonBuiltinName(type.Name))
+            if (FluidScriptHost.IsJsonBuiltinName(type.Name) || host?.ContainsType(type.Name) == true || host?.Contains(type.Name) == true)
             {
                 Error("FS2200", $"The builtin name '{type.Name}' cannot be used as a type.", type.Span);
                 continue;
@@ -134,7 +134,7 @@ internal sealed class CompilerEngine
         functionIds["__main"] = 0;
         foreach (var function in topLevelFunctions)
         {
-            if (FluidScriptHost.IsJsonBuiltinName(function.Name))
+            if (FluidScriptHost.IsJsonBuiltinName(function.Name) || host?.ContainsType(function.Name) == true || host?.Contains(function.Name) == true)
             {
                 Error("FS2007", $"The builtin name '{function.Name}' cannot be used as a function.", function.Span);
                 continue;
@@ -405,7 +405,7 @@ internal sealed class CompilerEngine
                 else
                 {
                     var inferredType = InferType(variable.Initializer, context);
-                    if (variable.TypeName is null && typeIds.ContainsKey(inferredType))
+                    if (variable.TypeName is null && (typeIds.ContainsKey(inferredType) || host?.ContainsType(inferredType) == true))
                     {
                         if (context.IsMain)
                             globalTypes[variable.Name] = inferredType;
@@ -542,6 +542,26 @@ internal sealed class CompilerEngine
     private void CompileMemberAssignment(MemberNode target, string operatorText, ExpressionNode value, FunctionContext context, CodeBuilder builder, SourceSpan span)
     {
         var typeName = InferType(target.Target, context);
+        if (TryGetHostType(typeName, out var hostTypeId, out var hostType) || typeName == "any")
+        {
+            if (typeName != "any" && !hostType!.Properties.ContainsKey(target.Name) && !hostType.Fields.ContainsKey(target.Name))
+            {
+                Error("FS2202", $"Type '{typeName}' has no member '{target.Name}'.", target.Span);
+                return;
+            }
+            CompileExpression(target.Target, context, builder);
+            if (operatorText == "=")
+                CompileExpression(value, context, builder);
+            else
+            {
+                builder.Emit(OpCode.Dup, span: target.Span);
+                builder.Emit(OpCode.HostGetProperty, hostTypeId, 0, AddConstant(FluidValue.From(target.Name)), span: target.Span);
+                CompileExpression(value, context, builder);
+                builder.Emit(BinaryOpcode(operatorText[..^1]), span: span);
+            }
+            builder.Emit(OpCode.HostSetProperty, hostTypeId, 0, AddConstant(FluidValue.From(target.Name)), span: span);
+            return;
+        }
         if (!TryGetField(typeName, target.Name, out var type, out var fieldIndex, out var field))
         {
             Error("FS2202", $"Type '{typeName}' has no member '{target.Name}'.", target.Span);
@@ -785,6 +805,18 @@ internal sealed class CompilerEngine
                 break;
             case MemberNode member:
                 var memberType = InferType(member.Target, context);
+                if (TryGetHostType(memberType, out var hostTypeId, out var hostType) || memberType == "any")
+                {
+                    if (memberType != "any" && !hostType!.Properties.ContainsKey(member.Name) && !hostType.Fields.ContainsKey(member.Name))
+                    {
+                        Error("FS2202", $"Type '{memberType}' has no member '{member.Name}'.", member.Span);
+                        builder.Emit(OpCode.Null, span: member.Span);
+                        break;
+                    }
+                    CompileExpression(member.Target, context, builder);
+                    builder.Emit(OpCode.HostGetProperty, hostTypeId, 0, AddConstant(FluidValue.From(member.Name)), span: member.Span);
+                    break;
+                }
                 if (!TryGetField(memberType, member.Name, out _, out var memberIndex, out _))
                 {
                     Error("FS2202", $"Type '{memberType}' has no member '{member.Name}'.", member.Span);
@@ -865,6 +897,26 @@ internal sealed class CompilerEngine
         if (call.Target is MemberNode member)
         {
             var ownerType = InferType(member.Target, context);
+            if (TryGetHostType(ownerType, out var hostTypeId, out var hostType) || ownerType == "any")
+            {
+                if (ownerType != "any" && !hostType!.Methods.ContainsKey(member.Name))
+                {
+                    Error("FS2202", $"Type '{ownerType}' has no method '{member.Name}'.", member.Span);
+                    builder.Emit(OpCode.Null, span: call.Span);
+                    return;
+                }
+                if (call.Arguments.Any(argument => argument.Name is not null))
+                {
+                    Error("FS2105", "Host method calls accept positional arguments only.", call.Span);
+                    builder.Emit(OpCode.Null, span: call.Span);
+                    return;
+                }
+                CompileExpression(member.Target, context, builder);
+                foreach (var argument in call.Arguments)
+                    CompileExpression(argument.Value, context, builder);
+                builder.Emit(OpCode.HostCallMethod, hostTypeId, call.Arguments.Count + 1, AddConstant(FluidValue.From(member.Name)), call.Span);
+                return;
+            }
             if (!TryGetMethod(ownerType, member.Name, out var methodId, out var method))
             {
                 Error("FS2202", $"Type '{ownerType}' has no method '{member.Name}'.", member.Span);
@@ -921,6 +973,18 @@ internal sealed class CompilerEngine
                 CompileExpression(argument, context, builder);
             }
             builder.Emit(OpCode.NewObject, typeId, ordered.Count, span: call.Span);
+        }
+        else if (TryGetHostType(target.Name, out var hostTypeId, out _))
+        {
+            if (call.Arguments.Any(argument => argument.Name is not null))
+            {
+                Error("FS2105", "Host constructors accept positional arguments only.", call.Span);
+                builder.Emit(OpCode.Null, span: call.Span);
+                return;
+            }
+            foreach (var argument in call.Arguments)
+                CompileExpression(argument.Value, context, builder);
+            builder.Emit(OpCode.HostNewObject, hostTypeId, call.Arguments.Count, span: call.Span);
         }
         else if (target.Name == "print")
         {
@@ -1386,7 +1450,7 @@ internal sealed class CompilerEngine
         var baseName = normalized.TrimEnd('[', ']');
         var isArray = normalized.EndsWith("[]", StringComparison.Ordinal);
         if (baseName is not ("any" or "null" or "bool" or "int" or "decimal" or "string" or "datetime" or "guid" or "byte" or "dict") &&
-            !typeIds.ContainsKey(baseName))
+            !typeIds.ContainsKey(baseName) && (host is null || !host.ContainsType(baseName)))
             Error("FS2100", $"Unknown type '{baseName}'.", span);
         return isArray ? baseName + "[]" : baseName;
     }
@@ -1431,7 +1495,7 @@ internal sealed class CompilerEngine
         CallNode call when call.Target is NameNode { Name: "jsonDeserialize" } => "any",
         CallNode call when call.Target is NameNode { Name: "jsonDeserializeAs" } &&
             call.Arguments.Count > 0 && call.Arguments[0].Value is NameNode typeName && typeIds.ContainsKey(typeName.Name) => typeName.Name,
-        CallNode call when call.Target is NameNode name && typeIds.ContainsKey(name.Name) => name.Name,
+        CallNode call when call.Target is NameNode name && (typeIds.ContainsKey(name.Name) || host?.ContainsType(name.Name) == true) => name.Name,
         CallNode call when call.Target is MemberNode member && functionReturnTypes.TryGetValue(MethodKey(InferType(member.Target, context), member.Name), out var methodReturnType) => methodReturnType,
         LambdaNode => "fn",
         InterpolatedStringNode => "string",
@@ -1453,9 +1517,43 @@ internal sealed class CompilerEngine
     private string InferMemberType(MemberNode member, FunctionContext context)
     {
         var ownerType = InferType(member.Target, context);
+        if (TryGetHostType(ownerType, out _, out var hostType))
+        {
+            if (hostType!.Properties.TryGetValue(member.Name, out var property))
+                return ScriptTypeForClr(property.PropertyType);
+            if (hostType!.Fields.TryGetValue(member.Name, out var hostField))
+                return ScriptTypeForClr(hostField.FieldType);
+        }
         return TryGetField(ownerType, member.Name, out _, out _, out var field)
             ? ValidateType(field.TypeName, field.Span)
             : "any";
+    }
+
+    private bool TryGetHostType(string typeName, out int typeId, out HostTypeRegistration? registration)
+    {
+        if (host is not null && host.TryGetType(typeName, out registration) && registration is not null)
+        {
+            typeId = registration.Id;
+            return true;
+        }
+        typeId = -1;
+        registration = null;
+        return false;
+    }
+
+    private string ScriptTypeForClr(Type type)
+    {
+        if (type == typeof(void)) return "null";
+        if (type == typeof(bool)) return "bool";
+        if (type == typeof(string) || type == typeof(char)) return "string";
+        if (type == typeof(byte)) return "byte";
+        if (type == typeof(short) || type == typeof(int) || type == typeof(long) || type == typeof(ushort) || type == typeof(uint) || type == typeof(ulong)) return "int";
+        if (type == typeof(float) || type == typeof(double) || type == typeof(decimal)) return "decimal";
+        if (type == typeof(DateTime) || type == typeof(DateTimeOffset)) return "datetime";
+        if (type == typeof(Guid)) return "guid";
+        if (type.IsArray) return ScriptTypeForClr(type.GetElementType()!) + "[]";
+        if (host is not null && host.TryGetType(type, out var registration) && registration is not null) return registration.Name;
+        return "any";
     }
 
     private sealed record BoundArgument(int ParameterIndex, ExpressionNode Value);

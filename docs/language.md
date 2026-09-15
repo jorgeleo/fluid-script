@@ -17,8 +17,8 @@ error. Assignment never declares a name.
 The runtime value set is `null`, `bool`, signed `int`, `decimal` (subject to
 the host decimal range), `string`, `datetime`, `guid`,
 `byte`, mutable arrays, mutable string-keyed dictionaries, functions, and user
-objects. Type hints are checked by the semantic pass; an omitted hint has type
-`any` and receives runtime checks.
+objects, plus explicitly registered CLR objects. Type hints are checked by the
+semantic pass; an omitted hint has type `any` and receives runtime checks.
 Integer arithmetic remains integer when both operands are integers; otherwise
 numeric arithmetic promotes to decimal. Strings concatenate with `+` only
 when both operands are strings. Equality is value equality for scalar values
@@ -38,6 +38,27 @@ assigned with a string index, such as `values["prop name"]`; assignment creates
 or replaces that key. A non-string dictionary key faults with `FS5031`, and a
 read of an absent key faults with `FS5032`. Dictionary values and index results
 have type `any`.
+
+The host may register CLR types with `FluidScriptHost.RegisterType`. A registered
+type can be constructed by calling its script name, and its public instance
+properties, fields, and methods can be accessed from FluidScript:
+
+```csharp
+host.RegisterType("Person", typeof(Person));
+```
+
+```fluid
+dim person = Person("Ada", 36)
+person.Age += 1
+print(person.Greet("Hello"))
+```
+
+The C# boundary is explicit: `host.Wrap(instance)` places a registered CLR
+object in a `FluidValue`, and host functions may return that value. Registered
+constructors and methods use deterministic overload binding and convert only
+the supported FluidScript scalar, array, dictionary, and registered-object
+values. Unregistered types and reflection outside the registered descriptor
+are rejected. Host construction, property, and method failures use `FS5017`.
 
 `jsonSerialize(value)` serializes JSON-native values (`null`, `bool`, `int`,
 `decimal`, `string`, arrays, dictionaries, and declared-object fields) to

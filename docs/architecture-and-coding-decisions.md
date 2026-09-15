@@ -148,10 +148,12 @@ not language-level control flow.
 
 `FluidValue` is the public tagged value representation for `null`, booleans,
 integers, decimals, strings, dates, GUIDs, bytes, arrays, dictionaries,
-functions, objects, and captured cells. Arrays, dictionaries, and objects preserve reference identity when
-mutated; captured variables use `FluidCell` so closures observe updates after
-the creating frame exits. There is no implicit CLR reflection conversion in
-the VM.
+functions, script objects, registered CLR objects, and captured cells. Arrays,
+dictionaries, script objects, and registered CLR objects preserve reference
+identity when mutated; captured variables use `FluidCell` so closures observe
+updates after the creating frame exits. CLR access is explicit and capability
+based: only public instance members of types registered on `FluidScriptHost`
+are reachable by the VM.
 
 ### A9 — two deterministic P-code wire forms (Accepted)
 
@@ -185,22 +187,25 @@ debug metadata.
 
 ## Host and script boundary
 
-### A11 — capability-based host functions (Accepted)
+### A11 — capability-based host functions and CLR objects (Accepted)
 
 Host behavior is explicitly registered through `FluidScriptHost`. A
 `NativeFunction` receives and returns `FluidValue`; names are resolved at
 compile time to registry IDs, with ID `0` reserved for the built-in `print`.
 `jsonSerialize`, `jsonDeserialize`, and `jsonDeserializeAs` use reserved
 negative intrinsic IDs, so they do not shift append-only host capability IDs.
-The VM exposes no reflection, arbitrary method invocation, ambient I/O,
-filesystem, network, or process capability.
+The VM exposes no ambient reflection, I/O, filesystem, network, or process
+capability. Registered CLR types are an explicit reflection capability: their
+public instance constructors, properties, fields, and methods are lowered to
+verified host-object opcodes and remain unavailable without the matching host.
 
 The same registry (or a compatible manifest with the same IDs) must be supplied
 when executing serialized P-code. Missing IDs produce a deterministic runtime
 fault. Host exceptions are converted to a script runtime fault without
 exposing an uncontrolled host stack trace. Host registration is append-only so
-existing IDs do not change; changing a function's meaning requires a new
-capability name/version.
+existing function and type IDs do not change; changing a capability's meaning
+requires a new name/version. Serialized modules that use registered CLR types
+must execute with a compatible host registration manifest.
 
 ### A12 — explicit execution context for data exchange (Accepted)
 
@@ -210,7 +215,8 @@ global slots; successful execution writes module globals back to that same
 dictionary. `FluidValue` arrays, dictionaries, and objects are intentionally reference values,
 so mutation/aliasing across the boundary must be documented and tested.
 
-No implicit CLR-to-script conversion is performed. `FluidJson` is an explicit,
+No implicit CLR-to-script conversion is performed. `host.Wrap` is the explicit
+CLR-to-script conversion for registered objects. `FluidJson` is an explicit,
 standard-JSON codec for JSON-native scalars, arrays, and dictionaries; it uses
 ordinal property ordering and rejects non-JSON-native values rather than
 silently converting date/time, GUID, byte, function, or cell values lossily.

@@ -182,8 +182,12 @@ public static class PCodeVerifier
             OpCode.IndexGet => -1,
             OpCode.IndexSet => -3,
             OpCode.NewObject => 1 - instruction.OperandB,
+            OpCode.HostNewObject => 1 - instruction.OperandB,
             OpCode.FieldGet => 0,
             OpCode.FieldSet => -2,
+            OpCode.HostGetProperty => 0,
+            OpCode.HostSetProperty => -2,
+            OpCode.HostCallMethod => 1 - instruction.OperandB,
             OpCode.MakeClosure => 1 - instruction.OperandB,
             OpCode.ToText or OpCode.Neg or OpCode.Not or OpCode.Jump or OpCode.JumpIfFalse or
                 OpCode.EnterHandler or OpCode.LeaveHandler or
@@ -218,6 +222,19 @@ public static class PCodeVerifier
             (instruction.OperandA < 0 || instruction.OperandA >= module.Types.Count || instruction.OperandB < 0 ||
              instruction.OperandB != module.Types[instruction.OperandA].FieldNames.Count))
             error = "Object instruction has an invalid type or field count.";
+        if (instruction.OpCode is OpCode.HostNewObject or OpCode.HostGetProperty or OpCode.HostSetProperty or OpCode.HostCallMethod &&
+            instruction.OperandA < -1)
+            error = "Host object instruction has an invalid type identifier.";
+        if (instruction.OpCode == OpCode.HostNewObject && instruction.OperandA < 1)
+            error = "Host construction requires a registered type identifier.";
+        if (instruction.OpCode is OpCode.HostGetProperty or OpCode.HostSetProperty or OpCode.HostCallMethod &&
+            (instruction.OperandC < 0 || instruction.OperandC >= module.Constants.Count ||
+             module.Constants[instruction.OperandC].Kind != FluidValueKind.String))
+            error = "Host object instruction has an invalid member name constant.";
+        if (instruction.OpCode == OpCode.HostNewObject && instruction.OperandB < 0)
+            error = "Host object instruction has an invalid argument count.";
+        if (instruction.OpCode == OpCode.HostCallMethod && instruction.OperandB < 1)
+            error = "Host method instruction must include its receiver.";
         if (instruction.OpCode is (OpCode.FieldGet or OpCode.FieldSet) && instruction.OperandA < 0)
             error = "Object member instruction has an invalid field index.";
         if (instruction.OpCode == OpCode.Const &&
@@ -249,16 +266,17 @@ public static class PCodeVerifier
         OpCode.MakeDictionary => instruction.OperandA is >= 0 and <= int.MaxValue / 2
             ? 2 * instruction.OperandA
             : int.MaxValue,
-        OpCode.NewObject => Math.Max(0, instruction.OperandB),
+        OpCode.NewObject or OpCode.HostNewObject => Math.Max(0, instruction.OperandB),
+        OpCode.HostCallMethod => Math.Max(0, instruction.OperandB),
         OpCode.Call or OpCode.CallNative => Math.Max(0, instruction.OperandB),
         OpCode.CallIndirect => Math.Max(0, instruction.OperandB + 1),
         OpCode.MakeClosure => Math.Max(0, instruction.OperandB),
         OpCode.Const or OpCode.Null or OpCode.LoadLocal or OpCode.LoadGlobal or OpCode.LoadCell or
             OpCode.LoadCapture or OpCode.LoadCaptureCell => 0,
-        OpCode.StoreLocal or OpCode.StoreGlobal or OpCode.StoreCapture or OpCode.Pop or OpCode.Neg or
+            OpCode.StoreLocal or OpCode.StoreGlobal or OpCode.StoreCapture or OpCode.Pop or OpCode.Neg or
             OpCode.Not or OpCode.JumpIfFalse or OpCode.ToText or OpCode.IndexGet or OpCode.FieldGet or
-            OpCode.Return or OpCode.Throw or OpCode.Rethrow => 1,
-        OpCode.FieldSet => 2,
+            OpCode.HostGetProperty or OpCode.Return or OpCode.Throw or OpCode.Rethrow => 1,
+        OpCode.FieldSet or OpCode.HostSetProperty => 2,
         _ => 0
     };
 }

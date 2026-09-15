@@ -199,11 +199,23 @@ public sealed class VirtualMachine
                 case OpCode.NewObject:
                     NewObject(module, instruction, stack, frame);
                     break;
+                case OpCode.HostNewObject:
+                    HostNewObject(instruction, stack, frame, context);
+                    break;
                 case OpCode.FieldGet:
                     FieldGet(module, instruction, stack, frame);
                     break;
                 case OpCode.FieldSet:
                     FieldSet(module, instruction, stack, frame);
+                    break;
+                case OpCode.HostGetProperty:
+                    HostGetProperty(module, instruction, stack, frame, context);
+                    break;
+                case OpCode.HostSetProperty:
+                    HostSetProperty(module, instruction, stack, frame, context);
+                    break;
+                case OpCode.HostCallMethod:
+                    HostCallMethod(module, instruction, stack, frame, context);
                     break;
                 case OpCode.Return:
                     var returnValue = Pop(stack, frame);
@@ -685,6 +697,95 @@ public sealed class VirtualMachine
         for (var index = type.FieldNames.Count - 1; index >= 0; index--)
             fields[type.FieldNames[index]] = Pop(stack, frame);
         Push(stack, FluidValue.FromObject(new FluidObject(type.Name, fields, type.ConstantFields)), frame);
+    }
+
+    private static void HostNewObject(Instruction instruction, List<FluidValue> stack, Frame frame, FluidScriptExecutionContext context)
+    {
+        HostTypeRegistration? registration = null;
+        if (context.Host is null || !context.Host.TryGetType(instruction.OperandA, out registration) || registration is null)
+            Fault("FS2006", "The host object type is not registered.", instruction.Span, frame.Function.Name);
+        var arguments = PopArguments(instruction.OperandB, stack, frame);
+        try
+        {
+            Push(stack, FluidValue.FromHostObject(new FluidHostObject(registration!, HostBinding.Create(registration!, arguments, context.Host!))), frame);
+        }
+        catch (Exception exception) when (exception is not RuntimeFaultException)
+        {
+            Fault("FS5017", $"Host object construction failed: {exception.Message}", instruction.Span, frame.Function.Name);
+        }
+    }
+
+    private static void HostGetProperty(PCodeModule module, Instruction instruction, List<FluidValue> stack, Frame frame, FluidScriptExecutionContext context)
+    {
+        var target = Pop(stack, frame);
+        if (target.Kind != FluidValueKind.HostObject)
+            Fault("FS5020", "Host member access requires a host object.", instruction.Span, frame.Function.Name);
+        var name = GetMemberName(module, instruction, frame);
+        if (instruction.OperandA >= 0 && target.AsHostObject().Registration.Id != instruction.OperandA)
+            Fault("FS5021", "The host object type does not match the member instruction.", instruction.Span, frame.Function.Name);
+        try
+        {
+            Push(stack, HostBinding.GetProperty(target.AsHostObject(), name, context.Host ?? throw new HostBindingException("A host is required.")), frame);
+        }
+        catch (Exception exception) when (exception is not RuntimeFaultException)
+        {
+            Fault("FS5017", $"Host property access failed: {exception.Message}", instruction.Span, frame.Function.Name);
+        }
+    }
+
+    private static void HostSetProperty(PCodeModule module, Instruction instruction, List<FluidValue> stack, Frame frame, FluidScriptExecutionContext context)
+    {
+        var value = Pop(stack, frame);
+        var target = Pop(stack, frame);
+        if (target.Kind != FluidValueKind.HostObject)
+            Fault("FS5020", "Host member access requires a host object.", instruction.Span, frame.Function.Name);
+        var name = GetMemberName(module, instruction, frame);
+        if (instruction.OperandA >= 0 && target.AsHostObject().Registration.Id != instruction.OperandA)
+            Fault("FS5021", "The host object type does not match the member instruction.", instruction.Span, frame.Function.Name);
+        try
+        {
+            HostBinding.SetProperty(target.AsHostObject(), name, value, context.Host ?? throw new HostBindingException("A host is required."));
+        }
+        catch (Exception exception) when (exception is not RuntimeFaultException)
+        {
+            Fault("FS5017", $"Host property assignment failed: {exception.Message}", instruction.Span, frame.Function.Name);
+        }
+    }
+
+    private static void HostCallMethod(PCodeModule module, Instruction instruction, List<FluidValue> stack, Frame frame, FluidScriptExecutionContext context)
+    {
+        var arguments = PopArguments(instruction.OperandB - 1, stack, frame);
+        var target = Pop(stack, frame);
+        if (target.Kind != FluidValueKind.HostObject)
+            Fault("FS5020", "Host method calls require a host object.", instruction.Span, frame.Function.Name);
+        var name = GetMemberName(module, instruction, frame);
+        if (instruction.OperandA >= 0 && target.AsHostObject().Registration.Id != instruction.OperandA)
+            Fault("FS5021", "The host object type does not match the method instruction.", instruction.Span, frame.Function.Name);
+        try
+        {
+            Push(stack, HostBinding.CallMethod(target.AsHostObject(), name, arguments, context.Host ?? throw new HostBindingException("A host is required.")), frame);
+        }
+        catch (Exception exception) when (exception is not RuntimeFaultException)
+        {
+            Fault("FS5017", $"Host method call failed: {exception.Message}", instruction.Span, frame.Function.Name);
+        }
+    }
+
+    private static string GetMemberName(PCodeModule module, Instruction instruction, Frame frame)
+    {
+        if (instruction.OperandC < 0 || instruction.OperandC >= module.Constants.Count || module.Constants[instruction.OperandC].Kind != FluidValueKind.String)
+            Fault("FS4004", "Host member instruction has an invalid name constant.", instruction.Span, frame.Function.Name);
+        return module.Constants[instruction.OperandC].AsString();
+    }
+
+    private static FluidValue[] PopArguments(int count, List<FluidValue> stack, Frame frame)
+    {
+        if (count < 0)
+            Fault("FS4004", "Host argument count is invalid.", frame.CurrentSpan, frame.Function.Name);
+        var arguments = new FluidValue[count];
+        for (var index = count - 1; index >= 0; index--)
+            arguments[index] = Pop(stack, frame);
+        return arguments;
     }
 
     private static void FieldGet(PCodeModule module, Instruction instruction, List<FluidValue> stack, Frame frame)
