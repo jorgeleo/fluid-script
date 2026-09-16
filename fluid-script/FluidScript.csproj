@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <IsPackable>true</IsPackable>
     <PackageId>FluidScript</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Authors>FluidScript contributors</Authors>
     <Description>A capability-based scripting language and deterministic virtual machine for .NET applications.</Description>
     <PackageTags>scripting;rules;automation;vm;dotnet</PackageTags>
